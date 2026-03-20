@@ -120,4 +120,4 @@ to change. Ideas in rough priority order:
 
 | Run name | val_iou | Notes |
 |----------|---------|-------|
-| baseline | —       | Starting point |
+| baseline | 0.1845  | U-Net [32,64,128,256], BCE+Dice, AdamW+OneCycleLR, 17 epochs in 20 min |

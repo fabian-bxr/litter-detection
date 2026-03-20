@@ -69,7 +69,7 @@ class LitterDataset(Dataset):
 
         if augment:
             self.transform = A.Compose([
-                A.RandomResizedCrop(height=crop_size, width=crop_size,
+                A.RandomResizedCrop(size=(crop_size, crop_size),
                                     scale=(0.4, 1.0), ratio=(0.75, 1.33)),
                 A.HorizontalFlip(p=0.5),
                 A.VerticalFlip(p=0.2),
