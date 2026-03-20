@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+data/
+mlruns/
+best_model.pth
+findings.md
+.DS_Store
