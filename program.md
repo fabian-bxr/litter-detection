@@ -132,4 +132,8 @@ to change. Ideas in rough priority order:
 | resnet34-aug-pct-start-0p15 | 0.5347 | pct_start=0.15 (was 0.05) — worse, reverted |
 | resnet34-aug-tversky-loss | 0.5362 | Tversky loss (alpha=0.3 beta=0.7) — worse than BCE+Dice, reverted |
 | resnet34-aug-lr-5e-4 | 0.5872 | LR=5e-4 (was 3e-4) — improved |
-| resnet34-aug-lr-8e-4 | **0.5936** | LR=8e-4 — marginal further improvement, CURRENT BEST |
+| resnet34-aug-lr-8e-4 | 0.5936 | LR=8e-4 — marginal further improvement |
+| resnet34-label-smoothing-0p05 | 0.5951 | Label smoothing 0.05 on BCE — slight improvement |
+| resnet34-label-smooth-0p02 | 0.6016 | Label smoothing 0.02 (reduced) — new best |
+| resnet34-label-smooth-0p01 | 0.6125 | Label smoothing 0.01 — even better |
+| resnet34-smooth01-no-vflip | **0.6241** | Remove VerticalFlip augmentation — new best, CURRENT BEST |

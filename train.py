@@ -40,7 +40,7 @@ from tqdm import tqdm
 TIME_LIMIT       = 20 * 60   # seconds of training per run
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
-LR               = 1e-3
+LR               = 8e-4
 WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
@@ -73,7 +73,6 @@ class LitterDataset(Dataset):
                 A.RandomResizedCrop(size=(crop_size, crop_size),
                                     scale=(0.4, 1.0), ratio=(0.75, 1.33)),
                 A.HorizontalFlip(p=0.5),
-                A.VerticalFlip(p=0.2),
                 A.RandomRotate90(p=0.3),
                 A.ColorJitter(brightness=0.3, contrast=0.3,
                               saturation=0.3, hue=0.05, p=0.7),
@@ -122,6 +121,71 @@ class ConvBlock(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+class SEBlock(nn.Module):
+    """Squeeze-and-Excitation channel attention block."""
+    def __init__(self, channels: int, reduction: int = 16):
+        super().__init__()
+        self.se = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(channels, max(channels // reduction, 4)),
+            nn.ReLU(inplace=True),
+            nn.Linear(max(channels // reduction, 4), channels),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        scale = self.se(x).view(x.size(0), x.size(1), 1, 1)
+        return x * scale
+
+
+class ASPPModule(nn.Module):
+    """
+    Atrous Spatial Pyramid Pooling for multi-scale context.
+    Applies dilated convolutions at multiple rates and fuses outputs.
+    """
+    def __init__(self, in_ch: int, out_ch: int, rates=(6, 12, 18)):
+        super().__init__()
+        # 1x1 convolution
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+        )
+        # Dilated 3x3 convolutions
+        self.dilated = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(in_ch, out_ch, 3, padding=r, dilation=r, bias=False),
+                nn.BatchNorm2d(out_ch),
+                nn.ReLU(inplace=True),
+            ) for r in rates
+        ])
+        # Global average pooling branch
+        self.gap = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(in_ch, out_ch, 1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+        )
+        # Fusion projection: (1 + len(rates) + 1) * out_ch → out_ch
+        n_branches = 1 + len(rates) + 1
+        self.project = nn.Sequential(
+            nn.Conv2d(n_branches * out_ch, out_ch, 1, bias=False),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+        )
+
+    def forward(self, x):
+        h, w = x.shape[2], x.shape[3]
+        branches = [self.conv1(x)]
+        for dil in self.dilated:
+            branches.append(dil(x))
+        gap_out = self.gap(x)
+        gap_out = F.interpolate(gap_out, size=(h, w), mode='bilinear', align_corners=False)
+        branches.append(gap_out)
+        return self.project(torch.cat(branches, dim=1))
 
 
 class UNet(nn.Module):
@@ -285,15 +349,215 @@ class ResNet34UNet(nn.Module):
         return self.head(d)            # 1 ch, H/1
 
 
+class ResNet50UNet(nn.Module):
+    """
+    U-Net with a pretrained ResNet50 encoder.
+
+    ResNet50 uses bottleneck blocks so channel counts differ from ResNet34:
+      stem   (64 ch,  H/2)
+      layer1 (256 ch, H/4)
+      layer2 (512 ch, H/8)
+      layer3 (1024 ch, H/16)
+      layer4 (2048 ch, H/32)  — used as bottleneck
+
+    BN layers in the backbone are frozen to preserve ImageNet statistics.
+    """
+
+    def __init__(self, dropout: float = DROPOUT):
+        super().__init__()
+
+        # ── Pretrained ResNet50 backbone ──────────────────────────────────
+        backbone = tv_models.resnet50(weights=tv_models.ResNet50_Weights.IMAGENET1K_V2)
+
+        # Stem: conv1 + bn1 + relu (output: 64 ch, stride 2)
+        self.stem_conv = nn.Sequential(backbone.conv1, backbone.bn1, backbone.relu)
+        self.stem_pool = backbone.maxpool   # stride 2 → H/4 total after stem+pool
+        self.layer1 = backbone.layer1       # 256 ch, H/4
+        self.layer2 = backbone.layer2       # 512 ch, H/8
+        self.layer3 = backbone.layer3       # 1024 ch, H/16
+        self.layer4 = backbone.layer4       # 2048 ch, H/32  (bottleneck)
+
+        # Freeze BN parameters in the backbone to preserve ImageNet stats
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.weight.requires_grad_(False)
+                m.bias.requires_grad_(False)
+
+        # ── Decoder (4 stages) ────────────────────────────────────────────
+        # Stage 1: upsample from 2048 → 512, concat with layer3 skip (1024) → 512
+        self.up1 = nn.ConvTranspose2d(2048, 512, kernel_size=2, stride=2)
+        self.dec1 = ConvBlock(512 + 1024, 512, dropout)
+
+        # Stage 2: upsample from 512 → 256, concat with layer2 skip (512) → 256
+        self.up2 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.dec2 = ConvBlock(256 + 512, 256, dropout)
+
+        # Stage 3: upsample from 256 → 128, concat with layer1 skip (256) → 128
+        self.up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.dec3 = ConvBlock(128 + 256, 128, dropout)
+
+        # Stage 4: upsample from 128 → 64, concat with stem skip (64) → 64
+        self.up4 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.dec4 = ConvBlock(64 + 64, 64, dropout)
+
+        # Final upsample ×2 to recover full input resolution
+        self.final_up = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+        self.final_conv = ConvBlock(32, 32, dropout)
+
+        # ── Head ──────────────────────────────────────────────────────────
+        self.head = nn.Conv2d(32, 1, kernel_size=1)
+
+    def _align(self, x, ref):
+        """Bilinear resize x to match ref spatial dimensions if needed."""
+        if x.shape[2:] != ref.shape[2:]:
+            x = F.interpolate(x, size=ref.shape[2:], mode="bilinear",
+                               align_corners=False)
+        return x
+
+    def forward(self, x):
+        # Encoder
+        s0 = self.stem_conv(x)                   # 64 ch, H/2
+        s1 = self.layer1(self.stem_pool(s0))      # 256 ch, H/4
+        s2 = self.layer2(s1)                      # 512 ch, H/8
+        s3 = self.layer3(s2)                      # 1024 ch, H/16
+        s4 = self.layer4(s3)                      # 2048 ch, H/32  (bottleneck)
+
+        # Decoder
+        d = self.up1(s4)
+        d = self._align(d, s3)
+        d = self.dec1(torch.cat([d, s3], dim=1))  # 512 ch, H/16
+
+        d = self.up2(d)
+        d = self._align(d, s2)
+        d = self.dec2(torch.cat([d, s2], dim=1))  # 256 ch, H/8
+
+        d = self.up3(d)
+        d = self._align(d, s1)
+        d = self.dec3(torch.cat([d, s1], dim=1))  # 128 ch, H/4
+
+        d = self.up4(d)
+        d = self._align(d, s0)
+        d = self.dec4(torch.cat([d, s0], dim=1))  # 64 ch, H/2
+
+        d = self.final_up(d)                       # 32 ch, H/1
+        d = self.final_conv(d)
+
+        return self.head(d)                        # 1 ch, H/1
+
+
+class EfficientNetB3UNet(nn.Module):
+    """
+    U-Net with a pretrained EfficientNet-B3 encoder.
+
+    Skip connections from EfficientNet-B3 feature stages:
+      features[1]: 24 ch,  H/2  (stem after initial conv)
+      features[2]: 32 ch,  H/4
+      features[3]: 48 ch,  H/8
+      features[5]: 136 ch, H/16
+      features[7]: 384 ch, H/32  — used as bottleneck
+
+    BN layers in the backbone are frozen to preserve ImageNet statistics.
+    """
+
+    def __init__(self, dropout: float = DROPOUT):
+        super().__init__()
+
+        # ── Pretrained EfficientNet-B3 backbone ───────────────────────────
+        backbone = tv_models.efficientnet_b3(
+            weights=tv_models.EfficientNet_B3_Weights.IMAGENET1K_V1)
+        features = backbone.features
+
+        # Extract feature stages as separate modules
+        self.stage0 = features[0]    # 40 ch,  H/2 (initial conv+bn+act)
+        self.stage1 = features[1]    # 24 ch,  H/2 (MBConv1 blocks)
+        self.stage2 = features[2]    # 32 ch,  H/4 (MBConv6 stride-2)
+        self.stage3 = features[3]    # 48 ch,  H/8 (MBConv6 stride-2)
+        self.stage4 = features[4]    # 96 ch,  H/16 (MBConv6 stride-2)
+        self.stage5 = features[5]    # 136 ch, H/16 (MBConv6)
+        self.stage6 = features[6]    # 232 ch, H/32 (MBConv6 stride-2)
+        self.stage7 = features[7]    # 384 ch, H/32 (MBConv6)
+
+        # Freeze BN parameters in the backbone to preserve ImageNet stats
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.weight.requires_grad_(False)
+                m.bias.requires_grad_(False)
+
+        # ── Decoder (4 stages) ────────────────────────────────────────────
+        # Stage 1: upsample from 384 → 136, concat with stage5 skip (136) → 256
+        self.up1 = nn.ConvTranspose2d(384, 136, kernel_size=2, stride=2)
+        self.dec1 = ConvBlock(136 + 136, 256, dropout)
+
+        # Stage 2: upsample from 256 → 128, concat with stage3 skip (48) → 128
+        self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.dec2 = ConvBlock(128 + 48, 128, dropout)
+
+        # Stage 3: upsample from 128 → 64, concat with stage2 skip (32) → 64
+        self.up3 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.dec3 = ConvBlock(64 + 32, 64, dropout)
+
+        # Stage 4: upsample from 64 → 32, concat with stage1 skip (24) → 32
+        self.up4 = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+        self.dec4 = ConvBlock(32 + 24, 32, dropout)
+
+        # Final upsample ×2 to recover full input resolution
+        self.final_up = nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2)
+        self.final_conv = ConvBlock(16, 16, dropout)
+
+        # ── Head ──────────────────────────────────────────────────────────
+        self.head = nn.Conv2d(16, 1, kernel_size=1)
+
+    def _align(self, x, ref):
+        """Bilinear resize x to match ref spatial dimensions if needed."""
+        if x.shape[2:] != ref.shape[2:]:
+            x = F.interpolate(x, size=ref.shape[2:], mode="bilinear",
+                               align_corners=False)
+        return x
+
+    def forward(self, x):
+        # Encoder
+        s0 = self.stage0(x)          # 40 ch, H/2
+        s1 = self.stage1(s0)         # 24 ch, H/2
+        s2 = self.stage2(s1)         # 32 ch, H/4
+        s3 = self.stage3(s2)         # 48 ch, H/8
+        s4 = self.stage4(s3)         # 96 ch, H/16
+        s5 = self.stage5(s4)         # 136 ch, H/16
+        s6 = self.stage6(s5)         # 232 ch, H/32
+        s7 = self.stage7(s6)         # 384 ch, H/32  (bottleneck)
+
+        # Decoder
+        d = self.up1(s7)
+        d = self._align(d, s5)
+        d = self.dec1(torch.cat([d, s5], dim=1))  # 256 ch, H/16
+
+        d = self.up2(d)
+        d = self._align(d, s3)
+        d = self.dec2(torch.cat([d, s3], dim=1))  # 128 ch, H/8
+
+        d = self.up3(d)
+        d = self._align(d, s2)
+        d = self.dec3(torch.cat([d, s2], dim=1))  # 64 ch, H/4
+
+        d = self.up4(d)
+        d = self._align(d, s1)
+        d = self.dec4(torch.cat([d, s1], dim=1))  # 32 ch, H/2
+
+        d = self.final_up(d)                       # 16 ch, H/1
+        d = self.final_conv(d)
+
+        return self.head(d)                        # 1 ch, H/1
+
+
 # ── Loss ──────────────────────────────────────────────────────────────────────
 
 class CombinedLoss(nn.Module):
-    """BCE + Dice loss (equal weight)."""
-    def __init__(self, pos_weight: float = POS_WEIGHT):
+    """BCE + Dice loss (equal weight) with label smoothing."""
+    def __init__(self, pos_weight: float = POS_WEIGHT, label_smoothing: float = 0.01):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor([pos_weight])
         )
+        self.label_smoothing = label_smoothing
 
     def dice_loss(self, logits, targets, smooth: float = 1.0):
         probs = torch.sigmoid(logits)
@@ -302,7 +566,12 @@ class CombinedLoss(nn.Module):
         return 1 - num / den
 
     def forward(self, logits, targets):
-        return self.bce(logits, targets) + self.dice_loss(logits, targets)
+        # Apply label smoothing: shift targets away from 0 and 1
+        if self.label_smoothing > 0:
+            targets_smooth = targets * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
+        else:
+            targets_smooth = targets
+        return self.bce(logits, targets_smooth) + self.dice_loss(logits, targets)
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
