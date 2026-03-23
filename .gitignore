@@ -5,3 +5,5 @@ data/
 mlruns/
 findings.md
 .DS_Store
+# generic training checkpoint (named checkpoints are tracked)
+best_model.pth

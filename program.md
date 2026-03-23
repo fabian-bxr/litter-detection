@@ -136,4 +136,19 @@ to change. Ideas in rough priority order:
 | resnet34-label-smoothing-0p05 | 0.5951 | Label smoothing 0.05 on BCE — slight improvement |
 | resnet34-label-smooth-0p02 | 0.6016 | Label smoothing 0.02 (reduced) — new best |
 | resnet34-label-smooth-0p01 | 0.6125 | Label smoothing 0.01 — even better |
-| resnet34-smooth01-no-vflip | **0.6241** | Remove VerticalFlip augmentation — new best, CURRENT BEST |
+| resnet34-smooth01-no-vflip | 0.6241 | Remove VerticalFlip augmentation — new best |
+| efficientnetb4-backbone | 0.5596 | EfficientNet-B4, 30 min budget, 15 epochs — ~114s/epoch vs 52s for ResNet34, still converging at end, reverted |
+| resnet34-90min | **0.6738** | ResNet34UNet, 90 min budget, 108 epochs — best ResNet34 result |
+| efficientnetb4-90min | 0.6355 | EfficientNet-B4, 90 min budget, 49 epochs — ~110s/epoch, slower convergence |
+| b4-crop-320 | 0.5796 | EfficientNet-B4, crop=320, LR=8e-4, 33 epochs, 45 min |
+| b4-crop320-lr-6e-4 | 0.5501 | EfficientNet-B4, crop=320, LR=6e-4, 33 epochs, 45 min — worse |
+| b4-crop-288 | 0.5807 | EfficientNet-B4, crop=288, LR=8e-4, 38 epochs, 45 min |
+| b4-crop320-pct-0p1 | 0.5595 | EfficientNet-B4, crop=320, pct_start=0.1, 33 epochs, 45 min — worse |
+| b4-frozen-backbone-5ep | 0.5575 | EfficientNet-B4, crop=320, frozen backbone 5ep then unfreeze, 36 epochs, 45 min — worse |
+| b4-crop320-lr-1e-3 | **0.6165** | EfficientNet-B4, crop=320, LR=1e-3, 33 epochs, 45 min — best B4 in loop 4 |
+| b4l2-lr-1p2e-3 | 0.6029 | LR=1.2e-3 — slightly too high, worse |
+| b4l2-lr-1p5e-3 | 0.6166 | LR=1.5e-3 — matches baseline, not a clear win |
+| b4l2-smooth-0p005 | **0.6323** | label_smooth=0.005 (halved) — new best B4 at 45 min |
+| b4l2-no-gaussnoise | 0.6078 | no GaussNoise — worse, reverted |
+| b4l2-lighter-aug | 0.5939 | no GaussNoise + no GridDistortion — worse, reverted |
+| b4l2-crop-352 | 0.5650 | CROP=352 — fewer epochs, worse, reverted |

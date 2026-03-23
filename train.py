@@ -548,6 +548,95 @@ class EfficientNetB3UNet(nn.Module):
         return self.head(d)                        # 1 ch, H/1
 
 
+class EfficientNetB4UNet(nn.Module):
+    """
+    U-Net with a pretrained EfficientNet-B4 encoder.
+
+    Skip connections from EfficientNet-B4 feature stages:
+      features[0]: 48 ch,  H/2   (initial conv+bn+act)
+      features[1]: 24 ch,  H/2   (MBConv1 blocks)
+      features[2]: 32 ch,  H/4   (MBConv6 stride-2)
+      features[3]: 56 ch,  H/8   (MBConv6 stride-2)
+      features[5]: 160 ch, H/16  (MBConv6)
+      features[7]: 448 ch, H/32  — used as bottleneck
+
+    BN layers in the backbone are frozen to preserve ImageNet statistics.
+    """
+
+    def __init__(self, dropout: float = DROPOUT):
+        super().__init__()
+
+        backbone = tv_models.efficientnet_b4(
+            weights=tv_models.EfficientNet_B4_Weights.IMAGENET1K_V1)
+        features = backbone.features
+
+        self.stage0 = features[0]    # 48 ch,  H/2
+        self.stage1 = features[1]    # 24 ch,  H/2
+        self.stage2 = features[2]    # 32 ch,  H/4
+        self.stage3 = features[3]    # 56 ch,  H/8
+        self.stage4 = features[4]    # 112 ch, H/16
+        self.stage5 = features[5]    # 160 ch, H/16
+        self.stage6 = features[6]    # 272 ch, H/32
+        self.stage7 = features[7]    # 448 ch, H/32  (bottleneck)
+
+        for m in self.modules():
+            if isinstance(m, nn.BatchNorm2d):
+                m.weight.requires_grad_(False)
+                m.bias.requires_grad_(False)
+
+        # Stage 1: 448 → 160, concat stage5 (160) → 256
+        self.up1  = nn.ConvTranspose2d(448, 160, kernel_size=2, stride=2)
+        self.dec1 = ConvBlock(160 + 160, 256, dropout)
+
+        # Stage 2: 256 → 128, concat stage3 (56) → 128
+        self.up2  = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.dec2 = ConvBlock(128 + 56, 128, dropout)
+
+        # Stage 3: 128 → 64, concat stage2 (32) → 64
+        self.up3  = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.dec3 = ConvBlock(64 + 32, 64, dropout)
+
+        # Stage 4: 64 → 32, concat stage1 (24) → 32
+        self.up4  = nn.ConvTranspose2d(64, 32, kernel_size=2, stride=2)
+        self.dec4 = ConvBlock(32 + 24, 32, dropout)
+
+        # Final ×2 to full resolution
+        self.final_up   = nn.ConvTranspose2d(32, 16, kernel_size=2, stride=2)
+        self.final_conv = ConvBlock(16, 16, dropout)
+        self.head       = nn.Conv2d(16, 1, kernel_size=1)
+
+    def _align(self, x, ref):
+        if x.shape[2:] != ref.shape[2:]:
+            x = F.interpolate(x, size=ref.shape[2:], mode="bilinear", align_corners=False)
+        return x
+
+    def forward(self, x):
+        s0 = self.stage0(x)          # 48 ch,  H/2
+        s1 = self.stage1(s0)         # 24 ch,  H/2
+        s2 = self.stage2(s1)         # 32 ch,  H/4
+        s3 = self.stage3(s2)         # 56 ch,  H/8
+        s4 = self.stage4(s3)         # 112 ch, H/16
+        s5 = self.stage5(s4)         # 160 ch, H/16
+        s6 = self.stage6(s5)         # 272 ch, H/32
+        s7 = self.stage7(s6)         # 448 ch, H/32
+
+        d = self.up1(s7);  d = self._align(d, s5)
+        d = self.dec1(torch.cat([d, s5], dim=1))   # 256 ch, H/16
+
+        d = self.up2(d);   d = self._align(d, s3)
+        d = self.dec2(torch.cat([d, s3], dim=1))   # 128 ch, H/8
+
+        d = self.up3(d);   d = self._align(d, s2)
+        d = self.dec3(torch.cat([d, s2], dim=1))   # 64 ch,  H/4
+
+        d = self.up4(d);   d = self._align(d, s1)
+        d = self.dec4(torch.cat([d, s1], dim=1))   # 32 ch,  H/2
+
+        d = self.final_up(d)
+        d = self.final_conv(d)
+        return self.head(d)                         # 1 ch,   H/1
+
+
 # ── Loss ──────────────────────────────────────────────────────────────────────
 
 class CombinedLoss(nn.Module):
@@ -680,7 +769,7 @@ def train(run_name: str, time_limit: int):
                 train_iou  += compute_iou(logits, masks)
                 step += 1
 
-            else:
+            else: #edu: see https://docs.python.org/3/reference/compound_stmts.html#for
                 # ── Validation ────────────────────────────────────────────
                 model.eval()
                 val_loss = 0.0
