@@ -27,6 +27,27 @@ Other approaches fine-tune a yolo model: e.g. see for https://github.com/jeremy-
 - [Instructions](program.md)
 - [Finding from previous runs](findings.md)
 
+## Setup
+
+Init project:
+
+```bash
+uv sync
+```
+
+Content:
+
+- There is a [analysis.ipynb](analysis.ipynb) notebook to take a first look on the project and test the existing models.
+- The project contains a mlflow project that stores the hole experiment and training history.
+  Run the following command to launch the mlflow server and ui
+  ```bash
+  uv run mlflow ui
+  ```
+
+
+
+
+
 ## Additional Content
 
 - [Experiment Tracking](https://mlflow.org/docs/latest/ml/getting-started/deep-learning/)
