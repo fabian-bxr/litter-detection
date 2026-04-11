@@ -28,6 +28,9 @@ dependencies = [
     "loguru>=0.7.3",
 ]
 
+[project.scripts]
+camera = "litter_detector.camera.main:main"
+
 [tool.uv]
 
 [build-system]

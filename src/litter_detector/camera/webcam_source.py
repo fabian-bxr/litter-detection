@@ -8,11 +8,20 @@ from litter_detector.camera.camera_source import CameraSource
 
 
 class WebcamSource(CameraSource):
-    def __init__(self, camera_id=0, framerate=30) -> None:
+    def __init__(self, camera_id=None, framerate=30) -> None:
         super().__init__()
         self.camera_id = camera_id
         self.framerate = framerate
         self.vs: VideoStream | None = None
+
+    @staticmethod
+    def _get_first_camera_id() -> int:
+        for i in range(5):
+            cap = cv2.VideoCapture(i)
+            if cap.read()[0]:
+                cap.release()
+                return i
+        raise RuntimeError("No webcam found")
 
     def _capture_frames(self) -> Iterator[cv2.typing.MatLike]:
         if self.vs is None:
@@ -22,10 +31,11 @@ class WebcamSource(CameraSource):
             time.sleep(1 / self.framerate)
 
     def start(self) -> None:
+        if self.camera_id is None:
+            self.camera_id = self._get_first_camera_id()
         self.vs = VideoStream(src=self.camera_id)
         self.vs.start()
 
     def stop(self) -> None:
         if self.vs is not None:
             self.vs.stop()
-

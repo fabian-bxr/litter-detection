@@ -1,4 +1,3 @@
-import time
 import queue
 import cv2
 import zenoh
@@ -38,11 +37,10 @@ class Go2Source(CameraSource):
     def start(self) -> None:
         self.session = zenoh.open(self.settings.zenoh_config())
         self.subscriber = self.session.declare_subscriber(
-            key_expr=self.settings.topics().go2_camera,
+            key_expr=self.settings.topics().camera.go2_camera,
             handler=self._on_frame,
         )
 
     def stop(self) -> None:
         if self.session:
             self.session.close()
-

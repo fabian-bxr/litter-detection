@@ -16,7 +16,7 @@ class CameraPublisher:
         self.camera = camera
 
         self.publisher = self.session.declare_publisher(
-            key_expr=self.topics.frames,
+            key_expr=self.topics.camera.frame,
             encoding=zenoh.Encoding.IMAGE_JPEG,
         )
 
@@ -35,8 +35,9 @@ class CameraPublisher:
 
 
 def main():
-    camera = WebcamSource(camera_id=0, framerate=30)
-    # camera = Go2Source()      # Requires Robodog to publish to: robodog/sensors/go2_camera
+    # TODO: Source needs to be configurable in settings, optional ID as well
+    camera = WebcamSource(framerate=30)
+    # camera = Go2Source()  # Requires Robodog to publish to: robodog/sensors/go2_camera
     publisher = CameraPublisher(camera)
     publisher.run()
 

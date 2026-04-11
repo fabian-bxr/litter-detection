@@ -3,22 +3,35 @@ from __future__ import annotations
 import os
 import zenoh
 
-from typing import Dict
 import msgspec
-from pydantic import BaseModel
 from pydantic_settings import BaseSettings
 
 
 class DetectionTopics(msgspec.Struct, frozen=True):
-    frames: str
-    detections: str
-    go2_camera: str
+    frame: str  # Original camera frame used for detection
+    mask: str  # Binary mask of detected litter
+    masked_frame: str  # Camera frame with litter mask applied
+    detections: str  # Detections JSON
 
 
-TOPICS = DetectionTopics(
-    frames="litter/frames",
-    detections="litter/detections",
-    go2_camera="robodog/sensors/go2_camera",
+class CameraTopics(msgspec.Struct, frozen=True):
+    go2_camera: str  # Go2's camera frame
+    frame: str  # Post-processed camera frame from selected source
+
+
+class Topics(msgspec.Struct, frozen=True):
+    detection: DetectionTopics
+    camera: CameraTopics
+
+
+TOPICS = Topics(
+    detection=DetectionTopics(
+        frame="litter/frame",
+        mask="litter/mask",
+        masked_frame="litter/masked_frame",
+        detections="litter/detection",
+    ),
+    camera=CameraTopics(go2_camera="robodog/sensors/go2_camera", frame="camera/frame"),
 )
 
 
@@ -32,11 +45,11 @@ def _build_zenoh_config() -> zenoh.Config:
 
 
 class Settings(BaseSettings):
-    frame_width: int = 640
-    frame_height: int = 480
+    frame_width: int = 1280
+    frame_height: int = 720
 
     @staticmethod
-    def topics() -> DetectionTopics:
+    def topics() -> Topics:
         return TOPICS
 
     @staticmethod
