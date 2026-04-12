@@ -47,6 +47,7 @@ def _build_zenoh_config() -> zenoh.Config:
 class Settings(BaseSettings):
     frame_width: int = 1280
     frame_height: int = 720
+    otel_endpoint: str = "http://localhost:4317"
 
     @staticmethod
     def topics() -> Topics:
@@ -56,3 +57,4 @@ class Settings(BaseSettings):
     def zenoh_config() -> zenoh.Config:
         """Builds a Zenoh client config from settings."""
         return _build_zenoh_config()
+

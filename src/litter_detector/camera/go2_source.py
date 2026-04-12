@@ -5,6 +5,7 @@ import zenoh
 from typing import Iterator
 import numpy as np
 from litter_detector.camera.camera_source import CameraSource
+from litter_detector.camera.metrics import tracer, camera_metrics
 
 
 class Go2Source(CameraSource):
@@ -20,6 +21,7 @@ class Go2Source(CameraSource):
         except queue.Full:
             self.frame_queue.get_nowait()  # drop oldest frame
             self.frame_queue.put_nowait(sample.payload.to_bytes())
+            camera_metrics.frames_dropped.add(1)
 
     def _capture_frames(self) -> Iterator[cv2.typing.MatLike]:
         while True:
@@ -34,6 +36,7 @@ class Go2Source(CameraSource):
             except queue.Empty:
                 continue
 
+    @tracer.start_as_current_span("camera.go2.start")
     def start(self) -> None:
         self.session = zenoh.open(self.settings.zenoh_config())
         self.subscriber = self.session.declare_subscriber(
@@ -41,6 +44,7 @@ class Go2Source(CameraSource):
             handler=self._on_frame,
         )
 
+    @tracer.start_as_current_span("camera.go2.stop")
     def stop(self) -> None:
         if self.session:
             self.session.close()
