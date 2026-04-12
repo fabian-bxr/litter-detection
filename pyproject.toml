@@ -20,10 +20,32 @@ dependencies = [
     "huggingface-hub>=0.23.0",
     "albumentations>=1.4.0",
     "opencv-python-headless>=4.10.0",
+    "pydantic>=2.12.5",
+    "eclipse-zenoh>=1.9.0",
+    "pydantic-settings>=2.13.1",
+    "imutils>=0.5.4",
+    "msgspec>=0.21.0",
+    "loguru>=0.7.3",
+    "opentelemetry-sdk>=1.40.0",
+    "opentelemetry-api>=1.40.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.40.0",
 ]
 
+[project.scripts]
+camera = "litter_detector.camera.main:main"
+
 [tool.uv]
-package = false
-dev-dependencies = [
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/litter_detector"]
+
+[dependency-groups]
+dev = [
     "pytest>=8.2.0",
+    "ruff>=0.15.10",
+    "ty>=0.0.29",
 ]
