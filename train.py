@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import mlflow
+import mlflow.pytorch
 import numpy as np
 import torch
 import torch.nn as nn
@@ -37,7 +38,7 @@ from tqdm import tqdm
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
-TIME_LIMIT       = 20 * 60   # seconds of training per run
+TIME_LIMIT       = 5 * 60   # seconds of training per run
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
 LR               = 8e-4
@@ -800,7 +801,11 @@ def train(run_name: str, time_limit: int):
                 if val_iou / max(n_val, 1) > best_val_iou:
                     best_val_iou = val_iou / max(n_val, 1)
                     torch.save(model.state_dict(), "best_model.pth")
-                    mlflow.log_artifact("best_model.pth")
+                    mlflow.pytorch.log_model(
+                        model,
+                        artifact_path="model",
+                        registered_model_name="litter-segmentation",
+                    )
 
                 print(
                     f"epoch {epoch:3d}  "
