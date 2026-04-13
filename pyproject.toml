@@ -33,6 +33,7 @@ dependencies = [
 
 [project.scripts]
 camera = "litter_detector.camera.main:main"
+detector = "litter_detector.detector.main:main"
 
 [tool.uv]
 
