@@ -724,8 +724,14 @@ def train(run_name: str, time_limit: int):
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
 
     # ── MLflow ────────────────────────────────────────────────────────────
-    mlflow.set_tracking_uri((REPO_ROOT / "mlruns").as_uri())
-    mlflow.set_experiment("litter-segmentation")
+    mlflow.set_tracking_uri(f"sqlite:///{REPO_ROOT / 'mlflow.db'}")
+    experiment_name = "litter-segmentation"
+    if mlflow.get_experiment_by_name(experiment_name) is None:
+        mlflow.create_experiment(
+            experiment_name,
+            artifact_location=(REPO_ROOT / "mlartifacts").as_uri(),
+        )
+    mlflow.set_experiment(experiment_name)
     with mlflow.start_run(run_name=run_name):
         mlflow.log_params({
             "batch_size":        BATCH_SIZE,
@@ -805,11 +811,6 @@ def train(run_name: str, time_limit: int):
                 if val_iou / max(n_val, 1) > best_val_iou:
                     best_val_iou = val_iou / max(n_val, 1)
                     torch.save(model.state_dict(), MODELS_DIR / "best_model.pth")
-                    mlflow.pytorch.log_model(
-                        model,
-                        artifact_path="model",
-                        registered_model_name="litter-segmentation",
-                    )
 
                 print(
                     f"epoch {epoch:3d}  "
@@ -823,6 +824,16 @@ def train(run_name: str, time_limit: int):
             break  # inner for-loop broke early (time limit)
 
         mlflow.log_metric("best_val_iou", best_val_iou)
+
+        best_ckpt = MODELS_DIR / "best_model.pth"
+        if best_ckpt.exists():
+            model.load_state_dict(torch.load(best_ckpt, map_location=device))
+            mlflow.pytorch.log_model(
+                model,
+                name="model",
+                registered_model_name="litter-segmentation",
+            )
+
         print(f"\nBest val_iou: {best_val_iou:.4f}")
         print("Run complete.")
 

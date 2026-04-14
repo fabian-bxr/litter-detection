@@ -23,7 +23,7 @@ Other approaches fine-tune a yolo model: e.g. see for https://github.com/jeremy-
 
 > Note: There is already one good model in this repository. Thus you should be able to investigate the performance using the Analysis Notebook.
 
-- [Analysis Notebook](notebooks/analysis.ipynb)
+- [Analysis Notebook](auto-research/analysis.ipynb)
 - [Instructions](auto-research/program.md)
 
 ## Setup
@@ -36,11 +36,11 @@ uv sync
 
 Content:
 
-- There is a [analysis.ipynb](notebooks/analysis.ipynb) notebook to take a first look on the project and test the existing models.
+- There is a [analysis.ipynb](auto-research/analysis.ipynb) notebook to take a first look on the project and test the existing models.
 - The project contains a mlflow project that stores the hole experiment and training history.
   Run the following command to launch the mlflow server and ui
   ```bash
-  uv run mlflow ui
+  uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
   ```
 
 
