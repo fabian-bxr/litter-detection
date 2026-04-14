@@ -9,16 +9,18 @@ This file IS modified by the agent. Everything is fair game:
   - Batch size, image crop size
   - Any other technique the agent wants to try
 
-Constraint: training stops after TIME_LIMIT seconds so every experiment is
-comparable. The primary metric logged to MLflow is val_iou (higher is better).
+Constraint: training stops after a fixed number of EPOCHS so every experiment
+sees the same amount of data regardless of hardware. The primary metric logged
+to MLflow is val_iou (higher is better).
 
 Usage:
-    uv run python train.py [--run-name NAME] [--time-limit SECONDS]
+    uv run python train.py [--run-name NAME] [--epochs N] [--seed N]
 """
 
 import argparse
 import json
 import os
+import random
 import time
 from pathlib import Path
 
@@ -38,7 +40,8 @@ from tqdm import tqdm
 
 # ── Hyperparameters (edit freely) ─────────────────────────────────────────────
 
-TIME_LIMIT       = 1 * 60   # seconds of training per run
+EPOCHS           = 20         # epochs of training per run (hardware-independent)
+SEED             = 42         # RNG seed for reproducibility across runs
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
 LR               = 8e-4
@@ -688,7 +691,16 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
-def train(run_name: str, time_limit: int):
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+def train(run_name: str, epochs: int, seed: int = SEED):
+    set_seed(seed)
     device = get_device()
     print(f"Device: {device}")
 
@@ -706,7 +718,8 @@ def train(run_name: str, time_limit: int):
                               persistent_workers=True)
 
     # ── Model ─────────────────────────────────────────────────────────────
-    model = ResNet34UNet(dropout=DROPOUT).to(device)
+    model_class = ResNet34UNet
+    model = model_class(dropout=DROPOUT).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {total_params:,}")
@@ -718,7 +731,7 @@ def train(run_name: str, time_limit: int):
         optimizer,
         max_lr=LR,
         steps_per_epoch=len(train_loader),
-        epochs=9999,          # effectively unlimited; time-budget controls stop
+        epochs=epochs,
         pct_start=0.05,
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
@@ -733,6 +746,9 @@ def train(run_name: str, time_limit: int):
         )
     mlflow.set_experiment(experiment_name)
     with mlflow.start_run(run_name=run_name):
+        mlflow.set_tags({
+            "model_class": model_class.__name__,
+        })
         mlflow.log_params({
             "batch_size":        BATCH_SIZE,
             "crop_size":         CROP_SIZE,
@@ -747,24 +763,22 @@ def train(run_name: str, time_limit: int):
             "loss":              "BCE+Dice",
             "total_params":      total_params,
             "device":            str(device),
-            "time_limit_s":      time_limit,
+            "epochs":            epochs,
+            "seed":              seed,
         })
 
         t0 = time.time()
         step = 0
-        epoch = 0
         best_val_iou = 0.0
 
-        while True:
-            epoch += 1
+        for epoch in range(1, epochs + 1):
             model.train()
             train_loss = 0.0
             train_iou  = 0.0
+            epoch_start = time.time()
+            samples_seen = 0
 
             for images, masks in train_loader:
-                if time.time() - t0 > time_limit:
-                    break
-
                 images = images.to(device, non_blocking=True)
                 masks  = masks.to(device,  non_blocking=True)
 
@@ -778,50 +792,52 @@ def train(run_name: str, time_limit: int):
 
                 train_loss += loss.item()
                 train_iou  += compute_iou(logits, masks)
+                samples_seen += images.size(0)
                 step += 1
 
-            else: #edu: see https://docs.python.org/3/reference/compound_stmts.html#for
-                # ── Validation ────────────────────────────────────────────
-                model.eval()
-                val_loss = 0.0
-                val_iou  = 0.0
-                with torch.no_grad():
-                    for images, masks in val_loader:
-                        images = images.to(device, non_blocking=True)
-                        masks  = masks.to(device,  non_blocking=True)
-                        logits = model(images)
-                        val_loss += criterion(logits, masks).item()
-                        val_iou  += compute_iou(logits, masks)
+            epoch_time = time.time() - epoch_start
+            samples_per_s = samples_seen / max(epoch_time, 1e-6)
 
-                n_train = len(train_loader)
-                n_val   = len(val_loader)
-                elapsed = time.time() - t0
+            # ── Validation ────────────────────────────────────────────
+            model.eval()
+            val_loss = 0.0
+            val_iou  = 0.0
+            with torch.no_grad():
+                for images, masks in val_loader:
+                    images = images.to(device, non_blocking=True)
+                    masks  = masks.to(device,  non_blocking=True)
+                    logits = model(images)
+                    val_loss += criterion(logits, masks).item()
+                    val_iou  += compute_iou(logits, masks)
 
-                metrics = {
-                    "train_loss": train_loss / max(n_train, 1),
-                    "train_iou":  train_iou  / max(n_train, 1),
-                    "val_loss":   val_loss   / max(n_val,   1),
-                    "val_iou":    val_iou    / max(n_val,   1),
-                    "epoch":      epoch,
-                    "elapsed_s":  elapsed,
-                    "lr":         scheduler.get_last_lr()[0],
-                }
-                mlflow.log_metrics(metrics, step=step)
+            n_train = len(train_loader)
+            n_val   = len(val_loader)
+            elapsed = time.time() - t0
 
-                if val_iou / max(n_val, 1) > best_val_iou:
-                    best_val_iou = val_iou / max(n_val, 1)
-                    torch.save(model.state_dict(), MODELS_DIR / "best_model.pth")
+            metrics = {
+                "train_loss":        train_loss / max(n_train, 1),
+                "train_iou":         train_iou  / max(n_train, 1),
+                "val_loss":          val_loss   / max(n_val,   1),
+                "val_iou":           val_iou    / max(n_val,   1),
+                "epoch":             epoch,
+                "elapsed_s":         elapsed,
+                "lr":                scheduler.get_last_lr()[0],
+                "samples_per_s":     samples_per_s,
+            }
+            mlflow.log_metrics(metrics, step=epoch)
 
-                print(
-                    f"epoch {epoch:3d}  "
-                    f"train_loss={metrics['train_loss']:.4f}  "
-                    f"train_iou={metrics['train_iou']:.4f}  "
-                    f"val_loss={metrics['val_loss']:.4f}  "
-                    f"val_iou={metrics['val_iou']:.4f}  "
-                    f"[{elapsed:.0f}s]"
-                )
-                continue  # keep outer while going
-            break  # inner for-loop broke early (time limit)
+            if val_iou / max(n_val, 1) > best_val_iou:
+                best_val_iou = val_iou / max(n_val, 1)
+                torch.save(model.state_dict(), MODELS_DIR / "best_model.pth")
+
+            print(
+                f"epoch {epoch:3d}/{epochs}  "
+                f"train_loss={metrics['train_loss']:.4f}  "
+                f"train_iou={metrics['train_iou']:.4f}  "
+                f"val_loss={metrics['val_loss']:.4f}  "
+                f"val_iou={metrics['val_iou']:.4f}  "
+                f"[{elapsed:.0f}s  {samples_per_s:.1f} samp/s]"
+            )
 
         mlflow.log_metric("best_val_iou", best_val_iou)
 
@@ -840,9 +856,11 @@ def train(run_name: str, time_limit: int):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--run-name",   default="baseline",
+    parser.add_argument("--run-name", default="baseline",
                         help="MLflow run name")
-    parser.add_argument("--time-limit", type=int, default=TIME_LIMIT,
-                        help="Training time budget in seconds")
+    parser.add_argument("--epochs",   type=int, default=EPOCHS,
+                        help="Number of training epochs (hardware-independent stop criterion)")
+    parser.add_argument("--seed",     type=int, default=SEED,
+                        help="Random seed for reproducibility")
     args = parser.parse_args()
-    train(run_name=args.run_name, time_limit=args.time_limit)
+    train(run_name=args.run_name, epochs=args.epochs, seed=args.seed)
