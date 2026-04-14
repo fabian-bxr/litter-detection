@@ -6,9 +6,10 @@ You are an autonomous ML research agent. Your goal is to **maximise `val_iou`**
 (intersection-over-union on the validation set) for a pixel-wise litter
 segmentation model trained on the TACO dataset.
 
-Every experiment runs for a fixed **TIME_LIMIT** seconds so results are
-directly comparable. After each run, examine what worked, form a hypothesis,
-modify `train.py`, and run the next experiment.
+Every experiment runs for a fixed number of **EPOCHS** so results are directly
+comparable across machines (training time depends on hardware, but each run
+sees the same amount of data). After each run, examine what worked, form a
+hypothesis, modify `train.py`, and run the next experiment.
 
 ---
 
@@ -16,8 +17,9 @@ modify `train.py`, and run the next experiment.
 
 1. **Only edit `train.py`.** Never modify `prepare.py`, `program.md`, or
    `analysis.ipynb`.
-2. **Do not change `TIME_LIMIT`** (default 1200 s / 20 min per run) unless the
-   human instructs you to. Consistent time budgets make experiments comparable.
+2. **Do not change `EPOCHS`** (default 20 per run) unless the human instructs
+   you to. A consistent epoch count is what makes experiments comparable across
+   students and machines.
 3. Every experiment must be a distinct MLflow run with a descriptive
    `--run-name` that captures what changed (e.g. `deeper-encoder`,
    `focal-loss`, `resnet34-backbone`).
@@ -45,7 +47,7 @@ uv run mlflow ui
 ## Running an experiment
 
 ```bash
-uv run python auto-research/train.py --run-name <descriptive-name> [--time-limit SECONDS]
+uv run python auto-research/train.py --run-name <descriptive-name> [--epochs N] [--seed N]
 ```
 
 The script prints per-epoch metrics and logs everything to MLflow. The best
@@ -95,7 +97,7 @@ to change. Ideas in rough priority order:
 | < 0.20          | Model barely segments anything            |
 | 0.20 – 0.45     | Learning something, room for improvement  |
 | 0.45 – 0.65     | Solid baseline                            |
-| > 0.65          | Strong result for this dataset/time budget|
+| > 0.65          | Strong result for this dataset/epoch budget|
 
 ---
 

@@ -15,8 +15,8 @@ uv sync
 # Data preparation (downloads TACO dataset from HuggingFace, creates data/ directory)
 uv run python auto-research/prepare.py
 
-# Training (time-limited, logs to MLflow)
-uv run python auto-research/train.py [--run-name NAME] [--time-limit SECONDS]
+# Training (epoch-limited, logs to MLflow)
+uv run python auto-research/train.py [--run-name NAME] [--epochs N] [--seed N]
 
 # MLflow experiment UI
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
@@ -34,7 +34,7 @@ uv run pytest
 
 ## Architecture
 
-**Training pipeline** (`auto-research/prepare.py`, `auto-research/train.py`): `prepare.py` downloads TACO from HuggingFace, converts COCO polygon annotations to binary masks (litter vs background), and writes to `data/` at the repo root. `train.py` trains a U-Net segmentation model with a configurable encoder/decoder, time-limited per run, logging metrics (primary: `val_iou`) to MLflow (`mlruns/` at repo root). Best checkpoint is saved to `models/best_model.pth`. Both scripts resolve paths relative to the repo root via `__file__`, so CWD does not matter. `train.py` is designed to be freely modified by the autoresearch agent; `prepare.py` is not.
+**Training pipeline** (`auto-research/prepare.py`, `auto-research/train.py`): `prepare.py` downloads TACO from HuggingFace, converts COCO polygon annotations to binary masks (litter vs background), and writes to `data/` at the repo root. `train.py` trains a U-Net segmentation model with a configurable encoder/decoder, epoch-limited per run (hardware-independent), logging metrics (primary: `val_iou`) to MLflow (`mlruns/` at repo root). Best checkpoint is saved to `models/best_model.pth`. Both scripts resolve paths relative to the repo root via `__file__`, so CWD does not matter. `train.py` is designed to be freely modified by the autoresearch agent; `prepare.py` is not.
 
 **Camera pipeline** (`src/litter_detector/`): A `CameraSource` ABC with two implementations — `WebcamSource` (local webcam via OpenCV/imutils) and `Go2Source` (receives frames from the Go2 robot via Zenoh subscription). `CameraPublisher` captures frames from either source, post-processes them (resize), JPEG-encodes, and publishes to Zenoh.
 
