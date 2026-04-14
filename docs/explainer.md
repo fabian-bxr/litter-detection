@@ -216,7 +216,7 @@ scheduler = OneCycleLR(
     optimizer,
     max_lr     = 8e-4,
     steps_per_epoch = steps_per_epoch,
-    epochs     = 9999,        # effectively unlimited; time budget stops training
+    epochs     = epochs,      # matches the --epochs CLI arg; schedule spans the full run
     pct_start  = 0.05,        # 5% of steps spent warming up
 )
 ```
@@ -225,7 +225,7 @@ scheduler = OneCycleLR(
 
 **Phase 2 — Cosine Anneal (95 % of steps):** LR decays smoothly toward zero. As the model improves, smaller updates allow fine-grained refinement.
 
-**Why such a short warmup?** The ResNet34 encoder starts with excellent ImageNet features — it doesn't need much coaxing. A longer warmup wastes the time budget without benefit. Experiment `resnet34-aug-pct-start-0p15` (warmup = 15 %) confirmed this was worse.
+**Why such a short warmup?** The ResNet34 encoder starts with excellent ImageNet features — it doesn't need much coaxing. A longer warmup wastes epochs without benefit. Experiment `resnet34-aug-pct-start-0p15` (warmup = 15 %) confirmed this was worse.
 
 **Why `max_lr = 8e-4`?** Found empirically — experiments at 1e-4 were too slow, 1.2e-3 introduced instability, 8e-4 was the sweet spot.
 
