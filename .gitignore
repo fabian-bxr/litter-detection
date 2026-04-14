@@ -3,7 +3,8 @@ __pycache__/
 *.pyc
 data/
 mlruns/
+mlartifacts/
 findings.md
-.DS_Store
+.DS_Stores
 # generic training checkpoint (named checkpoints are tracked)
 best_model.pth

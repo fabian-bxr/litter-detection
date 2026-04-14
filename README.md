@@ -10,22 +10,21 @@ Other approaches fine-tune a yolo model: e.g. see for https://github.com/jeremy-
 
 ## 1 Student Task
 
-- [Task Description](student_task.md)
-- [Context to this project](explainer.md)
+- [Task Description](docs/student_task.md)
+- [Context to this project](docs/explainer.md)
 
 ## Example images not in the dataset
 
 |No litter | Litter |
 |---|---|
-|![](Image2.jpeg) | ![](Image3.jpeg) |
+|![](docs/images/Image2.jpeg) | ![](docs/images/Image3.jpeg) |
 
 ## Autoresearch Content
 
 > Note: There is already one good model in this repository. Thus you should be able to investigate the performance using the Analysis Notebook.
 
-- [Analysis Notebook](analysis.ipynb)
-- [Instructions](program.md)
-- [Finding from previous runs](findings.md)
+- [Analysis Notebook](auto-research/analysis.ipynb)
+- [Instructions](auto-research/program.md)
 
 ## Setup
 
@@ -37,11 +36,11 @@ uv sync
 
 Content:
 
-- There is a [analysis.ipynb](analysis.ipynb) notebook to take a first look on the project and test the existing models.
+- There is a [analysis.ipynb](auto-research/analysis.ipynb) notebook to take a first look on the project and test the existing models.
 - The project contains a mlflow project that stores the hole experiment and training history.
   Run the following command to launch the mlflow server and ui
   ```bash
-  uv run mlflow ui
+  uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
   ```
 
 
