@@ -21,7 +21,7 @@ Assumptions:
 
 ### Work Packages
 
-1. Understand the provided repository and steps taken by the system. Understand the approach of automated research 
+1. Understand the provided repository and steps taken by the system. Understand the approach of automated research
 2. Identify improvement points and improve the solution (everything allowed)
 3. Prepare the model for inference on the Jetson hardware using tensorRT
 4. Compare the model with the alternative approach fine-tuning a yolo-model.
