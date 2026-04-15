@@ -43,7 +43,15 @@ Content:
   uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
   ```
 
+### Run Camera:
+```bash
+uv run camera [--source webcam/go2] [--id DeviceID]
+```
 
+### Run Detector:
+```bash
+uv run detector
+```
 
 
 

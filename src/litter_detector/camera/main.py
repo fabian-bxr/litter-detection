@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import time
 
 import zenoh
@@ -8,6 +9,7 @@ from loguru import logger
 from litter_detector.config import Settings
 from litter_detector.camera.camera_source import CameraSource
 from litter_detector.camera.webcam_source import WebcamSource
+from litter_detector.camera.go2_source import Go2Source
 from litter_detector.telemetry import setup_telemetry, shutdown_telemetry
 from litter_detector.camera.metrics import SERVICE_NAME, tracer, camera_metrics
 
@@ -45,11 +47,24 @@ class CameraPublisher:
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Litter Detector Camera Publisher")
+    parser.add_argument("--source", type=str, choices=["webcam", "go2"], help="Camera source to use")
+    parser.add_argument("--id", type=int, help="Webcam ID to use (only for webcam source)")
+    args = parser.parse_args()
+
     setup_telemetry(SERVICE_NAME)
     try:
-        # TODO: Source needs to be configurable in settings, optional ID as well
-        camera = WebcamSource(framerate=30)
-        # camera = Go2Source()  # Requires Robodog to publish to: robodog/sensors/go2_camera
+        settings = Settings()
+        
+        # Override settings with command line arguments if provided
+        source = args.source if args.source else settings.source
+        cam_id = args.id if args.id is not None else settings.id
+
+        if source.lower() == "go2":
+            camera = Go2Source()
+        else:
+            camera = WebcamSource(camera_id=cam_id, framerate=30)
+
         publisher = CameraPublisher(camera)
         publisher.run()
     finally:
