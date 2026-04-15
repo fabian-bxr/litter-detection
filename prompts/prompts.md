@@ -23,10 +23,12 @@
 ## Template 
 
 ### Prompt: 
+...
 
-**Tool used:**  
-**Error Rate (0-5):**  
-**Code Quality (0-5):**  
-**Discrepancy from Prompt (0-5):**  
-**Notes:**  
----
+| Metric                              | Score |
+|-------------------------------------|-------|
+| **Tool used**                       |       |
+| **Error Rate (0 - 4)**              |       |
+| **Code Quality (0 - 4)**            |       |
+| **Discrepancy from Prompt (0 - 4)** |       |
+| **Notes**                           |       |
