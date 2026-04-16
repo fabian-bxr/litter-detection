@@ -745,7 +745,8 @@ def train(run_name: str, epochs: int, seed: int = SEED):
             artifact_location=(REPO_ROOT / "mlartifacts").as_uri(),
         )
     mlflow.set_experiment(experiment_name)
-    with mlflow.start_run(run_name=run_name):
+    mlflow.config.enable_system_metrics_logging()
+    with mlflow.start_run(run_name=run_name, log_system_metrics=True):
         mlflow.set_tags({
             "model_class": model_class.__name__,
         })
