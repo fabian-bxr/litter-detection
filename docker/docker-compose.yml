@@ -1,0 +1,28 @@
+name: litter-detection
+
+services:
+
+  # ── grafana/otel-lgtm ────────────────────────────────────────────────────────
+  # All-in-one image: Grafana + Loki + Tempo + Prometheus + OTel Collector.
+  # Datasources (Prometheus, Loki, Tempo) are pre-wired inside the image.
+  lgtm:
+    image: grafana/otel-lgtm
+    ports:
+      - "4317:4317"   # OTLP gRPC  (app → collector)
+      - "4318:4318"   # OTLP HTTP  (app → collector)
+      - "3000:3000"   # Grafana UI
+    volumes:
+      - ./grafana/provisioning/dashboards:/otel-lgtm/grafana/conf/provisioning/dashboards:ro
+      - ./grafana/dashboards:/otel-lgtm/dashboards:ro
+      # ── Persistent data (named volumes) ─────────────────────────────────────
+      - grafana_data:/data/grafana
+      - prometheus_data:/data/prometheus
+      - loki_data:/data/loki
+      - tempo_data:/data/tempo
+    restart: unless-stopped
+
+volumes:
+  grafana_data:
+  prometheus_data:
+  loki_data:
+  tempo_data:
