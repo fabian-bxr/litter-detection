@@ -30,6 +30,9 @@ dependencies = [
     "opentelemetry-api>=1.40.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.40.0",
     "pandas-stubs~=2.3.3",
+    "onnx>=1.16.0",
+    "onnxruntime>=1.18.0",
+    "onnxscript>=0.1.0",
 ]
 
 [project.scripts]

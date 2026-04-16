@@ -850,6 +850,21 @@ def train(run_name: str, epochs: int, seed: int = SEED):
                 registered_model_name="litter-segmentation",
             )
 
+            onnx_path = MODELS_DIR / "best_model.onnx"
+            model.eval()
+            dummy = torch.randn(1, 3, CROP_SIZE, CROP_SIZE, device=device)
+            torch.onnx.export(
+                model,
+                dummy,
+                onnx_path,
+                input_names=["input"],
+                output_names=["logits"],
+                dynamic_axes={"input": {0: "batch"}, "logits": {0: "batch"}},
+                opset_version=17,
+                external_data=False,
+            )
+            mlflow.log_artifact(str(onnx_path))
+
         print(f"\nBest val_iou: {best_val_iou:.4f}")
         print("Run complete.")
 
