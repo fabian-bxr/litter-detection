@@ -53,6 +53,11 @@ uv run camera [--source webcam/go2] [--id DeviceID]
 uv run detector
 ```
 
+### Run Grafana OTel LGTM 
+```
+cd docker
+docker compose up -d
+```
 
 
 ## Additional Content
