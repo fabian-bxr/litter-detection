@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import threading
 import time
@@ -45,13 +46,13 @@ class LatestFrameSlot:
 
 class LitterDetector:
     @tracer.start_as_current_span("detector.init")
-    def __init__(self) -> None:
+    def __init__(self, model_uri: str) -> None:
         self.session = zenoh.open(Settings.zenoh_config())
         self.topics = Settings.topics()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.model, model_uri = model_mod.load_model(self.device)
-        logger.info(f"Model loaded from {model_uri} on device={self.device}")
+        self.runner, resolved_uri = model_mod.load_model(model_uri, self.device)
+        logger.info(f"Model loaded from {resolved_uri} on device={self.device}")
 
         self.frame_pub = self.session.declare_publisher(
             self.topics.detection.frame, encoding=zenoh.Encoding.IMAGE_JPEG
@@ -101,8 +102,7 @@ class LitterDetector:
 
             with tracer.start_as_current_span("inference"):
                 inf_start = time.perf_counter()
-                with torch.inference_mode():
-                    logits = self.model(tensor)
+                logits = self.runner.infer(tensor)
                 inf_ms = (time.perf_counter() - inf_start) * 1000
                 detector_metrics.inference_time_ms.record(inf_ms)
                 span.set_attribute("inference.time_ms", inf_ms)
@@ -162,10 +162,22 @@ class LitterDetector:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Litter segmentation detector")
+    parser.add_argument(
+        "--model",
+        default=model_mod.resolve_default_uri(),
+        help=(
+            "Model source: MLflow URI ('models:/name/version', 'runs:/<id>/model') "
+            "or a local .onnx file path. Defaults to LITTER_MODEL_URI / MLFLOW_MODEL_URI "
+            f"env vars, then {model_mod.DEFAULT_MODEL_URI!r}."
+        ),
+    )
+    args = parser.parse_args()
+
     setup_telemetry(SERVICE_NAME)
     detector: LitterDetector | None = None
     try:
-        detector = LitterDetector()
+        detector = LitterDetector(model_uri=args.model)
         detector.run()
     finally:
         if detector is not None:
