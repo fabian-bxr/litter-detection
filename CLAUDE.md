@@ -9,9 +9,7 @@ Autonomous CNN training for litter segmentation on the TACO dataset, designed to
 ## Commands
 
 ```bash
-# Setup (install git-lfs once per machine, then inside the clone)
-sudo pacman -S git-lfs  # or: apt install git-lfs / brew install git-lfs
-git lfs install
+# Setup
 uv sync
 
 # Data preparation (downloads TACO dataset from HuggingFace, creates data/ directory)
@@ -54,7 +52,7 @@ uv run pytest
 ## Key Details
 
 - Python 3.11, managed with `uv`
-- Pre-trained model weights live in `models/`. `.onnx` files (self-contained graph + weights) are the distribution format and are tracked via **Git LFS** (see `.gitattributes`); `.pth` state-dicts are kept for resume-training. `best_model.pth` is gitignored; named checkpoints are tracked.
+- Pre-trained model weights live in `models/`. `.onnx` files (self-contained graph + weights) are the distribution format and are committed directly to the repo; `.pth` state-dicts are kept for resume-training. `best_model.pth` is gitignored; named checkpoints are tracked. Each file must stay under GitHub's 100 MB hard limit — resnet34 and efficientnetb4 are already close (93 MB / 74 MB), so keep the set of checkpoints small.
 - The detector (`uv run detector`) loads from MLflow by default (`models:/litter-segmentation/latest`); pass `--model path/to/model.onnx` or set `LITTER_MODEL_URI` to load a local ONNX instead. ONNX inference runs on CPU by default; for GPU ONNX inference install `onnxruntime-gpu` separately (CUDA version must match the torch wheels — beware of cu12/cu13 conflicts).
 - The `auto-research/analysis.ipynb` notebook is for evaluating model performance
 - Docs (including `explainer.md`, `student_task.md`, diagrams, README hero images) are under `docs/`

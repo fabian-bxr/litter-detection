@@ -28,15 +28,11 @@ Other approaches fine-tune a yolo model: e.g. see for https://github.com/jeremy-
 
 ## Setup
 
-Install Git LFS (once per machine), then init the project:
+Init project:
 
 ```bash
-sudo pacman -S git-lfs   # or: apt install git-lfs / brew install git-lfs
-git lfs install
 uv sync
 ```
-
-Git LFS is required to pull the `.onnx` model weights under `models/` — without it, clones end up with pointer stubs instead of the actual files.
 
 Content:
 
@@ -70,7 +66,7 @@ You can also set `LITTER_MODEL_URI` to make a choice sticky for the shell. ONNX 
 
 ### Distributing trained models
 
-Training writes both `models/best_model.pth` (state-dict, for resume-training) and `models/best_model.onnx` (self-contained graph + weights, for distribution). To share a named checkpoint across machines, rename the `.onnx` to something descriptive and commit it — Git LFS handles the upload:
+Training writes both `models/best_model.pth` (state-dict, for resume-training) and `models/best_model.onnx` (self-contained graph + weights, for distribution). To share a named checkpoint across machines, rename the `.onnx` to something descriptive and commit it directly:
 
 ```bash
 # From an existing .pth:
@@ -80,7 +76,7 @@ git add models/best_resnet34.onnx
 git commit -m "models: add best_resnet34.onnx"
 ```
 
-The `.onnx` format is architecture-agnostic at load time, so adding a new architecture (EfficientNet, MobileNet, …) needs no changes to the detector.
+The `.onnx` format is architecture-agnostic at load time, so adding a new architecture (EfficientNet, MobileNet, …) needs no changes to the detector. Keep the number of tracked model files small — each update bakes the full binary into git history.
 
 ### Run Grafana OTel LGTM 
 ```
