@@ -21,7 +21,7 @@ uv run python auto-research/prepare.py
 uv run python auto-research/train.py [--run-name NAME] [--epochs N] [--seed N]
 
 # Export an existing .pth state-dict to a single-file .onnx for distribution
-uv run python auto-research/export_onnx.py --arch resnet34 --pth models/best_resnet34.pth
+uv run python scripts/export_onnx.py --arch resnet34 --pth models/best_resnet34.pth
 
 # MLflow experiment UI
 uv run mlflow ui --backend-store-uri sqlite:///mlflow.db

@@ -28,11 +28,15 @@ Other approaches fine-tune a yolo model: e.g. see for https://github.com/jeremy-
 
 ## Setup
 
-Init project:
+Install Git LFS (once per machine), then init the project:
 
 ```bash
+sudo pacman -S git-lfs   # or: apt install git-lfs / brew install git-lfs
+git lfs install
 uv sync
 ```
+
+Git LFS is required to pull the `.onnx` model weights under `models/` — without it, clones end up with pointer stubs instead of the actual files.
 
 Content:
 
@@ -42,6 +46,7 @@ Content:
   ```bash
   uv run mlflow ui --backend-store-uri sqlite:///mlflow.db
   ```
+  >To upgrade outdated DB: `uv run mlflow db upgrade sqlite:///mlflow.db`
 
 ### Run Camera:
 ```bash
@@ -49,9 +54,33 @@ uv run camera [--source webcam/go2] [--id DeviceID]
 ```
 
 ### Run Detector:
+
+By default the detector loads from the MLflow registry (`models:/litter-segmentation/latest`). To run against a shared `.onnx` checkpoint from `models/` instead, pass `--model`:
+
 ```bash
+# MLflow (default)
 uv run detector
+
+# Local ONNX file
+uv run detector --model models/best_resnet34.onnx
+uv run detector --model models/best_efficientnetb4.onnx
 ```
+
+You can also set `LITTER_MODEL_URI` to make a choice sticky for the shell. ONNX inference runs on CPU by default; GPU ONNX requires installing `onnxruntime-gpu` with a CUDA version matching the torch wheels.
+
+### Distributing trained models
+
+Training writes both `models/best_model.pth` (state-dict, for resume-training) and `models/best_model.onnx` (self-contained graph + weights, for distribution). To share a named checkpoint across machines, rename the `.onnx` to something descriptive and commit it — Git LFS handles the upload:
+
+```bash
+# From an existing .pth:
+uv run python scripts/export_onnx.py --arch resnet34 --pth models/best_resnet34.pth
+
+git add models/best_resnet34.onnx
+git commit -m "models: add best_resnet34.onnx"
+```
+
+The `.onnx` format is architecture-agnostic at load time, so adding a new architecture (EfficientNet, MobileNet, …) needs no changes to the detector.
 
 ### Run Grafana OTel LGTM 
 ```
