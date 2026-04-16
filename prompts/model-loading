@@ -1,0 +1,6 @@
+ Currently, the detector in @src/litter_detector/detector/  loads the model from mlflow directly. the mlflow storage is locally and not saved through vsc, as it would cause too many merge issues. Additionally to the mlflow model, the model
+  is also saved as a .pth file inside @models/ folder. The current is how we can distribute trained models easier within our team and accross machines so the detector can use the trained model for inference.
+  Research and recommend potential solutions for distributing trained models, preferably through git vsc if possible. If a suitable solution is found, add this model functionality to the @src/litter_detector/detector/ with args to select the
+  model (mlflow / local & which model).
+
+
