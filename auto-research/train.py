@@ -48,7 +48,7 @@ SEED             = 42         # RNG seed for reproducibility across runs
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
 ACCUM_STEPS      = 1          # gradient accumulation (1 = disabled)
-LR               = 5e-5
+LR               = 2e-4
 WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
@@ -57,6 +57,8 @@ POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imba
                                # override with value from data/meta.json
 EMA_DECAY        = 0.999      # exponential moving average of model weights for eval
 TTA_HFLIP        = True       # horizontal-flip test-time augmentation at validation
+MIXUP_PROB       = 0.3        # probability of applying batch-level mixup per step
+MIXUP_ALPHA      = 0.2        # Beta(alpha, alpha) mixing concentration
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -832,9 +834,8 @@ def train(run_name: str, epochs: int, seed: int = SEED):
     ema = ModelEma(model, decay=EMA_DECAY)
 
     # ── Optimizer + Schedule ──────────────────────────────────────────────
-    from timm.optim import Lion
-    optimizer = Lion(model.parameters(), lr=LR,
-                     weight_decay=WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR,
+                                  weight_decay=WEIGHT_DECAY)
     # OneCycleLR step count must match actual optimizer.step() calls when
     # gradient accumulation is in use.
     optim_steps_per_epoch = (len(train_loader) + ACCUM_STEPS - 1) // ACCUM_STEPS
@@ -875,7 +876,7 @@ def train(run_name: str, epochs: int, seed: int = SEED):
             "ema_decay":         EMA_DECAY,
             "tta_hflip":         TTA_HFLIP,
             "pos_weight":        pos_weight,
-            "optimizer":         "Lion",
+            "optimizer":         "AdamW",
             "scheduler":         "OneCycleLR",
             "loss":              "0.1*BCE+0.9*Lovasz",
             "total_params":      total_params,
@@ -900,8 +901,15 @@ def train(run_name: str, epochs: int, seed: int = SEED):
                 images = images.to(device, non_blocking=True)
                 masks  = masks.to(device,  non_blocking=True)
 
-                logits = model(images)
-                loss   = criterion(logits, masks)
+                if MIXUP_PROB > 0 and random.random() < MIXUP_PROB and images.size(0) > 1:
+                    lam  = np.random.beta(MIXUP_ALPHA, MIXUP_ALPHA)
+                    perm = torch.randperm(images.size(0), device=images.device)
+                    mixed_images = lam * images + (1 - lam) * images[perm]
+                    logits = model(mixed_images)
+                    loss   = lam * criterion(logits, masks) + (1 - lam) * criterion(logits, masks[perm])
+                else:
+                    logits = model(images)
+                    loss   = criterion(logits, masks)
                 (loss / ACCUM_STEPS).backward()
 
                 is_step = (batch_idx + 1) % ACCUM_STEPS == 0 \
