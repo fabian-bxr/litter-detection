@@ -817,8 +817,8 @@ def train(run_name: str, epochs: int, seed: int = SEED):
     # Tier 1 step 1: smp DeepLabV3+ with MiT-B0 encoder.
     # MiT-B0 (~3.7M params) is more sample-efficient than ImageNet ResNets on
     # small datasets; DeepLabV3+ adds ASPP for multi-scale context.
-    model_name = "smp.UnetPlusPlus(efficientnetv2_s)"
-    model = smp.UnetPlusPlus(
+    model_name = "smp.MAnet(efficientnetv2_s)"
+    model = smp.MAnet(
         encoder_name="tu-tf_efficientnetv2_s",
         encoder_weights="imagenet",
         in_channels=3,
@@ -868,7 +868,7 @@ def train(run_name: str, epochs: int, seed: int = SEED):
             "lr":                LR,
             "weight_decay":      WEIGHT_DECAY,
             "encoder_channels":  "tf_efficientnetv2_s-pretrained",
-            "decoder_channels":  "UnetPlusPlus",
+            "decoder_channels":  "MAnet",
             "dropout":           DROPOUT,
             "copy_paste_prob":   COPY_PASTE_PROB,
             "ema_decay":         EMA_DECAY,
