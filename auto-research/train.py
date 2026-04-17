@@ -730,7 +730,7 @@ class CombinedLoss(nn.Module):
             targets_smooth = targets * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
         else:
             targets_smooth = targets
-        return 0.5 * self.bce(logits, targets_smooth) + 0.5 * self.lovasz(logits, targets)
+        return 0.3 * self.bce(logits, targets_smooth) + 0.7 * self.lovasz(logits, targets)
 
 
 # ── EMA ───────────────────────────────────────────────────────────────────────
@@ -876,7 +876,7 @@ def train(run_name: str, epochs: int, seed: int = SEED):
             "pos_weight":        pos_weight,
             "optimizer":         "AdamW",
             "scheduler":         "OneCycleLR",
-            "loss":              "0.5*BCE+0.5*Lovasz",
+            "loss":              "0.3*BCE+0.7*Lovasz",
             "total_params":      total_params,
             "device":            str(device),
             "epochs":            epochs,
