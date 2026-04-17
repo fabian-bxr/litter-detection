@@ -55,7 +55,7 @@ DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
 DROPOUT          = 0.1
 POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
                                # override with value from data/meta.json
-EMA_DECAY        = 0.995      # exponential moving average of model weights for eval
+EMA_DECAY        = 0.999      # exponential moving average of model weights for eval
 TTA_HFLIP        = True       # horizontal-flip test-time augmentation at validation
 
 # ── Data ──────────────────────────────────────────────────────────────────────
