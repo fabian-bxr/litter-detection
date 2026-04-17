@@ -1,0 +1,25 @@
+I am currently working on training a machine learning model for litter detection on the TACO dataset: https://github.com/pedropro/TACO
+
+For this, we have already trained models using efficientnetb4 and ResNet34 as backbones, but model performance (val iou) is plateauing.
+
+What steps could we take to increase the model's performance? Possibly looking at smaller nets as our dataset is only around 1250 samples big.
+
+Please research some possible directions to try out that could help us with our model's performance.
+
+
+- Update the @auto-research/program.md based on your suggested approaches, especially the recommendation on what to do first (smaller backbone, decoder and copy-paste augmentation) so my auto-research agent can start working on this
+- Rewrite the @auto-research/program.md to be a completely new training run. The first run should be a baseline run on the current resnet34 performance (use 20 epochs, as the default). Then start working on the improvements.
+
+
+
+### Prompt 2:
+The @program.md file should not be updated by the agents. After each training run, the train.py should be committed, with a short description of the run name and val_ioo. To record the results (Run log), log the results to results.tsv
+  (tab-separated, NOT comma-separated — commas break in descriptions). Also add if the approach was kept, discarded or if crashed. Also add the hash of the git commit hash (short, 7 characters)  to the results.tsv. Do not track the
+  results.tsv with git.
+  Your task is to update the @auto-research/program.md file with a section on how the logging should be done: Git commit -> log results.tsv with metrics and commit hash -> continue. Additionally, transfer the current Run log to the
+  @auto-research/results.tsv file (leave git commit hash blank as they were not committed).
+
+
+Run the effv2s with longer training again and report the results, read the
+  @auto-research/program.md for this
+

@@ -1,4 +1,4 @@
-# AutoResearcher — Litter Segmentation
+# AutoResearcher — Litter Segmentation (Loop 5)
 
 ## Mission
 
@@ -6,26 +6,36 @@ You are an autonomous ML research agent. Your goal is to **maximise `val_iou`**
 (intersection-over-union on the validation set) for a pixel-wise litter
 segmentation model trained on the TACO dataset.
 
-Every experiment runs for a fixed number of **EPOCHS** so results are directly
-comparable across machines (training time depends on hardware, but each run
-sees the same amount of data). After each run, examine what worked, form a
-hypothesis, modify `train.py`, and run the next experiment.
+This is a **fresh research loop**. Previous loops (visible in MLflow history)
+peaked at `val_iou ≈ 0.6738` with a ResNet34 U-Net trained for 108 epochs
+(90-minute time budget). This loop returns to the **default 20-epoch budget**
+so all runs are directly comparable, and re-establishes the baseline before
+attacking the plateau with the directions below.
+
+The plateau is almost certainly **data/regularisation-limited, not
+capacity-limited** — ResNet34 / EfficientNet-B4 are oversized for ~1062
+training images. The plan therefore moves *down* in backbone size and *up*
+in decoder quality and augmentation richness.
 
 ---
 
 ## Rules
 
-1. **Only edit `train.py`.** Never modify `prepare.py`, `program.md`, or
-   `analysis.ipynb`.
+1. **Only edit `train.py`.** Never modify `prepare.py` or `analysis.ipynb`.
+   `program.md` may be edited by the human; the agent should treat it as
+   read-only.
 2. **Do not change `EPOCHS`** (default 20 per run) unless the human instructs
-   you to. A consistent epoch count is what makes experiments comparable across
-   students and machines.
+   you to. A consistent epoch count is what makes experiments comparable.
 3. Every experiment must be a distinct MLflow run with a descriptive
-   `--run-name` that captures what changed (e.g. `deeper-encoder`,
-   `focal-loss`, `resnet34-backbone`).
-4. Always read the latest `val_iou` from the MLflow run before deciding on the
-   next change.
-5. One change at a time — isolate variables so you know what caused improvement.
+   `--run-name` that captures what changed (e.g. `smp-mitb0-deeplabv3plus`,
+   `copy-paste-aug`, `lovasz-loss`).
+4. Always read the latest `val_iou` from MLflow before deciding the next
+   change.
+5. **One change at a time** — isolate variables so you know what caused any
+   improvement or regression.
+6. After each run, log the result to `auto-research/results.md` following
+   the workflow in **Logging each run** below. Never edit `program.md`
+   itself — only the human updates it.
 
 ---
 
@@ -42,6 +52,13 @@ uv run python auto-research/prepare.py
 uv run mlflow ui
 ```
 
+Many of the directions below depend on `segmentation_models_pytorch`, which
+is **not yet installed**. Add it before the first non-baseline run:
+
+```bash
+uv add segmentation-models-pytorch
+```
+
 ---
 
 ## Running an experiment
@@ -51,42 +68,171 @@ uv run python auto-research/train.py --run-name <descriptive-name> [--epochs N] 
 ```
 
 The script prints per-epoch metrics and logs everything to MLflow. The best
-checkpoint is saved to `models/best_model.pth` (at the repo root).
+checkpoint is saved to `models/best_model.pth` and exported to
+`models/best_model.onnx`.
 
 ---
 
-## What to optimise in `train.py`
+## Logging each run
 
-Everything between the `# ── Hyperparameters` and bottom of the file is yours
-to change. Ideas in rough priority order:
+`program.md` is **read-only for the agent** — never edit it. The run log
+lives in `auto-research/results.md` (gitignored). Each experiment follows
+this loop:
+
+1. Edit `train.py` — one logical change matching the next step of the plan.
+2. Run: `uv run python auto-research/train.py --run-name <name>`
+3. If the run **crashed**, append a row with `Status=crashed`, leave the
+   `Commit` column empty, fix the issue, and retry. Otherwise continue.
+4. Commit the `train.py` change with a short message naming the run and its
+   `val_iou`, e.g.:
+   ```bash
+   git commit -am "smp-mitb1-deeplabv3plus: val_iou=0.7015"
+   ```
+5. Read the 7-char commit hash: `git rev-parse --short HEAD`.
+6. Append one row to the table in `auto-research/results.md` with that hash.
+7. Decide **kept** or **discarded**:
+   - **kept** — improved on previous best (or is the first row of the loop).
+     Leave the change in `train.py` for the next run.
+   - **discarded** — regressed. Revert `train.py` to the previous state
+     (`git revert <hash>` or a manual revert commit) before the next step.
+8. Continue to the next step of the plan.
+
+### `results.md` schema
+
+Markdown table with one row per run. Columns, in order:
+
+| Column      | Description                                                       |
+|-------------|-------------------------------------------------------------------|
+| `Run name`  | MLflow run name (matches `--run-name`)                            |
+| `val_iou`   | Best `val_iou` observed during the run, 4 decimal places          |
+| `Δ vs best` | `val_iou` − previous best (signed, 4 decimals); `—` for row 1     |
+| `Status`    | `kept`, `discarded`, or `crashed`                                 |
+| `Commit`    | Short 7-char git hash of the `train.py` commit; empty if crashed  |
+| `Notes`     | One-line summary of what changed and what you observed            |
+
+---
+
+## The plan — in execution order
+
+Run these sequentially. **One change per run.** After each run, compare
+`val_iou` to the previous best, log the result in the Run log, and decide
+whether to keep or revert before proceeding.
+
+### Step 0 — Re-baseline (do this first)
+
+| Run name | Change | Purpose |
+|----------|--------|---------|
+| `baseline-resnet34-20ep` | None — current `train.py` as-is, ResNet34UNet, EPOCHS=20 | Establish a clean 20-epoch reference for this loop. All later runs in this loop compare against this number, not the old 90-min results. |
+
+Do **not** change anything for this run. Just run `train.py` as it stands.
+
+### Tier 1 — start here (highest expected payoff)
+
+These three changes address the three biggest weaknesses in the current
+setup: backbone too large for the dataset, decoder too simple for varied
+object scales, and augmentation that doesn't synthesise new compositions.
+
+1. **`smp-mitb0-deeplabv3plus`** — Switch model to
+   `segmentation_models_pytorch.DeepLabV3Plus(encoder_name="mit_b0",
+   encoder_weights="imagenet", in_channels=3, classes=1)`. Replaces the
+   hand-rolled `ResNet34UNet`. MiT-B0 is a 3.7M-param transformer encoder
+   with stronger sample efficiency than ImageNet ResNets on small datasets;
+   DeepLabV3+ adds ASPP for multi-scale context (litter ranges from
+   cigarette butts to bags). Keep loss, optimiser, augmentation, crop, LR
+   identical for a clean comparison. Note: BN-freezing logic is no longer
+   relevant — `smp` handles its own BN; just leave it as-is unless you see a
+   problem.
+2. **`copy-paste-aug`** — On top of whatever Tier 1 step 1 left as best,
+   add copy-paste augmentation in `LitterDataset`. With probability ~0.5,
+   sample a second `(image, mask)` pair, find connected components in the
+   second mask, copy those pixel regions onto the current image (with
+   optional small rotation/scale jitter), and OR the pasted regions into
+   the current mask. With ~1062 train images this synthesises 10k+ varied
+   compositions and is the single most-cited augmentation win for small
+   segmentation datasets. Implement before `A.Normalize` so values are still
+   in 0–255 uint8.
+3. **`tta-ema`** — Two cheap, additive improvements rolled into one run:
+   (a) maintain an exponential moving average of model weights during
+   training (decay ~0.999) and evaluate the EMA copy at validation;
+   (b) at validation only, run inputs and their h-flip through the model
+   and average the logits before computing IoU. Both are well-known +0.5–3%
+   tricks. Only export the EMA weights to ONNX.
+
+### Tier 2 — once Tier 1 is exhausted
+
+4. **`lovasz-bce-loss`** — Replace BCE+Dice with Lovász-Softmax + BCE
+   (e.g. 0.5/0.5). Lovász directly optimises IoU (the eval metric).
+   `smp.losses.LovaszLoss(mode="binary")` exists if you took Tier 1 step 1.
+5. **`crop-512-grad-accum`** — Re-try CROP=512 (TACO has many small
+   objects 384 blurs) with BATCH_SIZE=4 and gradient accumulation steps=2 to
+   keep effective batch at 8. Now plausible because the MiT-B0 backbone is
+   smaller than ResNet34.
+6. **Backbone sweep** — same decoder, recipe, augmentation, varying only
+   `encoder_name`:
+   - `smp-mitb1-deeplabv3plus`
+   - `smp-mobilenetv3l-deeplabv3plus`
+   - `smp-effb0-deeplabv3plus`
+   - `smp-effv2s-deeplabv3plus`
+
+### Tier 3 — bigger swings, more effort (only if Tiers 1–2 plateau)
+
+7. **`pretrain-trashcan-finetune`** — Pretrain encoder on TrashCan 1.0 /
+   ZeroWaste-f / UAVVaste, fine-tune on TACO. Typically +3–5% IoU.
+8. **`dinov2-small-frozen-decoder`** — DINOv2-small as a *frozen* feature
+   extractor with a light decoder on top. DINOv2 has exceptional sample
+   efficiency on small datasets when truly frozen.
+9. **`multitask-supercategory-aux`** — Add a 28-supercategory auxiliary
+   head trained jointly; collapse to binary at inference. Strong regulariser
+   on small datasets. Requires a `prepare.py` change to emit per-class
+   masks — **ask the human first**, since Rule 1 forbids editing
+   `prepare.py`.
+
+### What probably won't help much (skip unless results suggest otherwise)
+
+- More attention modules on the existing U-Net (SE was already tried).
+- Yet more LR sweeps on the existing recipe (already well-tuned in prior
+  loops at 5e-4 → 1e-3 depending on backbone).
+- Heavier backbones (B4 already saturates the dataset).
+- Removing existing strong augmentations (GridDistortion, ElasticTransform,
+  ColorJitter, GaussNoise) — prior loops confirmed each helps.
+
+---
+
+## Reference: what to optimise in `train.py`
+
+Everything between `# ── Hyperparameters` and the bottom of the file is fair
+game. Catalogued options below — use these to inform variations beyond the
+plan above.
 
 ### Architecture
-- **Encoder depth**: add/remove stages in `ENCODER_CHANNELS`
-- **Backbone**: replace the custom encoder with a pretrained ResNet/EfficientNet
-  using `torchvision.models` feature extractors (freeze early layers)
-- **Attention**: add CBAM, SE blocks, or a lightweight transformer decoder
-- **Decoder**: try FPN-style multi-scale fusion instead of plain U-Net skip
-  connections
+- Backbone: pretrained ResNet/EfficientNet/MiT/MobileNet/DINOv2 via
+  `torchvision.models` or `segmentation_models_pytorch`.
+- Decoder: U-Net, Unet++, DeepLabV3+, MAnet, UPerNet, FPN, PAN.
+- Attention: CBAM, SE, lightweight transformer decoders.
 
 ### Loss
-- Current: BCE + Dice (equal weight)
-- Try: Focal loss (helps extreme class imbalance), Lovász-Softmax,
-  weighted combos of the above
+- BCE, Dice, Focal, Tversky / Focal-Tversky, Lovász-Softmax, weighted combos.
+- Label smoothing applies only to BCE — never to Dice.
 
 ### Optimiser & schedule
-- Current: AdamW + OneCycleLR
-- Try: SGD + cosine annealing, Lion optimiser
+- AdamW + OneCycleLR (current), SGD + cosine annealing, Lion.
 
 ### Regularisation
-- Dropout rate, stochastic depth, mixup on images/masks
+- Dropout, stochastic depth, mixup, EMA of weights.
 
 ### Data augmentation
-- Current: RandomResizedCrop, flips, ColorJitter, GaussNoise
-- Try: GridDistortion, ElasticTransform, CutMix, copy-paste augmentation
+- Geometric: RandomResizedCrop, flips, RandomRotate90, GridDistortion,
+  ElasticTransform.
+- Photometric: ColorJitter, GaussNoise, GaussianBlur.
+- Compositional: CutMix, Mosaic, **copy-paste**.
 
-### Batch & resolution
-- `BATCH_SIZE`, `CROP_SIZE` — larger crops give more context but fewer
-  gradient updates per second
+### Inference-time
+- TTA (h-flip, multi-scale), EMA weights at eval.
+
+### Evaluation
+- Val set ~188 images — apparent plateaus can be variance noise. For
+  borderline results (Δ < 1%), re-run with 2–3 seeds before declaring a
+  regression.
 
 ---
 
@@ -97,60 +243,25 @@ to change. Ideas in rough priority order:
 | < 0.20          | Model barely segments anything            |
 | 0.20 – 0.45     | Learning something, room for improvement  |
 | 0.45 – 0.65     | Solid baseline                            |
-| > 0.65          | Strong result for this dataset/epoch budget|
+| > 0.65          | Strong result for this dataset/epoch budget |
+
+Reference: prior loop's best at the 90-min budget reached 0.6738. At the
+default 20-epoch budget, the Tier 1 changes should aim to clear the
+re-baseline by a meaningful margin.
 
 ---
 
 ## Agent loop
 
 ```
-1. Read the last run's val_iou from MLflow (or stdout)
-2. Hypothesise one change likely to improve it
-3. Edit train.py — one logical change
+1. Read the last run's val_iou from MLflow (or stdout).
+2. Pick the next step from "The plan" above (in order).
+3. Edit train.py — one logical change matching that step.
 4. Run: uv run python auto-research/train.py --run-name <name>
-5. Compare val_iou with previous best
-6. If improved: keep change, go to step 2
-   If worse:     revert change, go to step 2 with different hypothesis
-7. After 8–12 experiments, write a short summary of findings to auto-research/findings.md
+5. Compare val_iou with previous best.
+6. If improved: keep change.
+   If worse:     revert change before the next step.
+7. Commit `train.py` and append a row to `auto-research/results.md` — see
+   **Logging each run** above for the full workflow.
+8. After 8–12 experiments, write a short summary to auto-research/findings.md.
 ```
-
----
-
-## Current best
-
-> Update this section after each experiment.
-
-| Run name | val_iou | Notes |
-|----------|---------|-------|
-| baseline | 0.1845  | U-Net [32,64,128,256], BCE+Dice, AdamW+OneCycleLR, 17 epochs in 20 min |
-| deeper-encoder-64-128-256-512 | 0.2698 | U-Net [64,128,256,512], BCE+Dice, AdamW+OneCycleLR, 25M params, 6 epochs in 20 min |
-| focal-dice-loss | 0.2243 | Focal(gamma=2)+Dice loss, reverted — worse |
-| lower-lr-1e-4 | 0.1790 | LR=1e-4 too slow for time budget, reverted |
-| larger-crop-448 | 0.2127 | CROP=448, batch=6 — fewer steps hurts, reverted |
-| se-attention-blocks | 0.2339 | SE attention on each ConvBlock — slower per epoch, reverted |
-| enhanced-augmentation-grid-elastic | 0.2531 | GridDistortion+ElasticTransform added — close but below best, reverted |
-| resnet34-pretrained-backbone | 0.5119 | ResNet34 ImageNet pretrained encoder, 23 epochs — massive +89% improvement |
-| resnet34-enhanced-augmentation | 0.5465 | + GridDistortion+ElasticTransform augmentation — further improvement |
-| resnet34-aug-pct-start-0p15 | 0.5347 | pct_start=0.15 (was 0.05) — worse, reverted |
-| resnet34-aug-tversky-loss | 0.5362 | Tversky loss (alpha=0.3 beta=0.7) — worse than BCE+Dice, reverted |
-| resnet34-aug-lr-5e-4 | 0.5872 | LR=5e-4 (was 3e-4) — improved |
-| resnet34-aug-lr-8e-4 | 0.5936 | LR=8e-4 — marginal further improvement |
-| resnet34-label-smoothing-0p05 | 0.5951 | Label smoothing 0.05 on BCE — slight improvement |
-| resnet34-label-smooth-0p02 | 0.6016 | Label smoothing 0.02 (reduced) — new best |
-| resnet34-label-smooth-0p01 | 0.6125 | Label smoothing 0.01 — even better |
-| resnet34-smooth01-no-vflip | 0.6241 | Remove VerticalFlip augmentation — new best |
-| efficientnetb4-backbone | 0.5596 | EfficientNet-B4, 30 min budget, 15 epochs — ~114s/epoch vs 52s for ResNet34, still converging at end, reverted |
-| resnet34-90min | **0.6738** | ResNet34UNet, 90 min budget, 108 epochs — best ResNet34 result |
-| efficientnetb4-90min | 0.6355 | EfficientNet-B4, 90 min budget, 49 epochs — ~110s/epoch, slower convergence |
-| b4-crop-320 | 0.5796 | EfficientNet-B4, crop=320, LR=8e-4, 33 epochs, 45 min |
-| b4-crop320-lr-6e-4 | 0.5501 | EfficientNet-B4, crop=320, LR=6e-4, 33 epochs, 45 min — worse |
-| b4-crop-288 | 0.5807 | EfficientNet-B4, crop=288, LR=8e-4, 38 epochs, 45 min |
-| b4-crop320-pct-0p1 | 0.5595 | EfficientNet-B4, crop=320, pct_start=0.1, 33 epochs, 45 min — worse |
-| b4-frozen-backbone-5ep | 0.5575 | EfficientNet-B4, crop=320, frozen backbone 5ep then unfreeze, 36 epochs, 45 min — worse |
-| b4-crop320-lr-1e-3 | **0.6165** | EfficientNet-B4, crop=320, LR=1e-3, 33 epochs, 45 min — best B4 in loop 4 |
-| b4l2-lr-1p2e-3 | 0.6029 | LR=1.2e-3 — slightly too high, worse |
-| b4l2-lr-1p5e-3 | 0.6166 | LR=1.5e-3 — matches baseline, not a clear win |
-| b4l2-smooth-0p005 | **0.6323** | label_smooth=0.005 (halved) — new best B4 at 45 min |
-| b4l2-no-gaussnoise | 0.6078 | no GaussNoise — worse, reverted |
-| b4l2-lighter-aug | 0.5939 | no GaussNoise + no GridDistortion — worse, reverted |
-| b4l2-crop-352 | 0.5650 | CROP=352 — fewer epochs, worse, reverted |
