@@ -29,7 +29,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 from huggingface_hub import snapshot_download
 from tqdm import tqdm
 
@@ -129,7 +129,8 @@ def main():
                 try:
                     with zf.open(name_map[inner_key]) as img_f:
                         img_bytes = img_f.read()
-                    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                    img = Image.open(io.BytesIO(img_bytes))
+                    img = ImageOps.exif_transpose(img).convert("RGB")
                 except Exception as e:
                     tqdm.write(f"  Skipping {inner_path}: {e}")
                     skipped += 1
