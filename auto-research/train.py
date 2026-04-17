@@ -57,8 +57,6 @@ POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imba
                                # override with value from data/meta.json
 EMA_DECAY        = 0.999      # exponential moving average of model weights for eval
 TTA_HFLIP        = True       # horizontal-flip test-time augmentation at validation
-MIXUP_PROB       = 0.3        # probability of applying batch-level mixup per step
-MIXUP_ALPHA      = 0.2        # Beta(alpha, alpha) mixing concentration
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -901,15 +899,8 @@ def train(run_name: str, epochs: int, seed: int = SEED):
                 images = images.to(device, non_blocking=True)
                 masks  = masks.to(device,  non_blocking=True)
 
-                if MIXUP_PROB > 0 and random.random() < MIXUP_PROB and images.size(0) > 1:
-                    lam  = np.random.beta(MIXUP_ALPHA, MIXUP_ALPHA)
-                    perm = torch.randperm(images.size(0), device=images.device)
-                    mixed_images = lam * images + (1 - lam) * images[perm]
-                    logits = model(mixed_images)
-                    loss   = lam * criterion(logits, masks) + (1 - lam) * criterion(logits, masks[perm])
-                else:
-                    logits = model(images)
-                    loss   = criterion(logits, masks)
+                logits = model(images)
+                loss   = criterion(logits, masks)
                 (loss / ACCUM_STEPS).backward()
 
                 is_step = (batch_idx + 1) % ACCUM_STEPS == 0 \
