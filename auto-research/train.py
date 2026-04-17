@@ -48,7 +48,7 @@ SEED             = 42         # RNG seed for reproducibility across runs
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
 ACCUM_STEPS      = 1          # gradient accumulation (1 = disabled)
-LR               = 2e-4
+LR               = 5e-5
 WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
@@ -832,8 +832,9 @@ def train(run_name: str, epochs: int, seed: int = SEED):
     ema = ModelEma(model, decay=EMA_DECAY)
 
     # ── Optimizer + Schedule ──────────────────────────────────────────────
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR,
-                                  weight_decay=WEIGHT_DECAY)
+    from timm.optim import Lion
+    optimizer = Lion(model.parameters(), lr=LR,
+                     weight_decay=WEIGHT_DECAY)
     # OneCycleLR step count must match actual optimizer.step() calls when
     # gradient accumulation is in use.
     optim_steps_per_epoch = (len(train_loader) + ACCUM_STEPS - 1) // ACCUM_STEPS
@@ -842,7 +843,7 @@ def train(run_name: str, epochs: int, seed: int = SEED):
         max_lr=LR,
         steps_per_epoch=optim_steps_per_epoch,
         epochs=epochs,
-        pct_start=0.1,
+        pct_start=0.05,
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
 
@@ -874,7 +875,7 @@ def train(run_name: str, epochs: int, seed: int = SEED):
             "ema_decay":         EMA_DECAY,
             "tta_hflip":         TTA_HFLIP,
             "pos_weight":        pos_weight,
-            "optimizer":         "AdamW",
+            "optimizer":         "Lion",
             "scheduler":         "OneCycleLR",
             "loss":              "0.1*BCE+0.9*Lovasz",
             "total_params":      total_params,
