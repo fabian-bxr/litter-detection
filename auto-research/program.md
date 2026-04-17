@@ -238,11 +238,11 @@ plan above.
 
 ## Metric interpretation
 
-| `val_iou` range | Interpretation                            |
-|-----------------|-------------------------------------------|
-| < 0.20          | Model barely segments anything            |
-| 0.20 – 0.45     | Learning something, room for improvement  |
-| 0.45 – 0.65     | Solid baseline                            |
+| `val_iou` range | Interpretation                              |
+|-----------------|---------------------------------------------|
+| < 0.20          | Model barely segments anything              |
+| 0.20 – 0.45     | Learning something, room for improvement    |
+| 0.45 – 0.65     | Solid baseline                              |
 | > 0.65          | Strong result for this dataset/epoch budget |
 
 Reference: prior loop's best at the 90-min budget reached 0.6738. At the
