@@ -48,7 +48,7 @@ SEED             = 42         # RNG seed for reproducibility across runs
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
 ACCUM_STEPS      = 1          # gradient accumulation (1 = disabled)
-LR               = 2e-4
+LR               = 5e-4
 WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
@@ -75,7 +75,7 @@ def load_meta() -> dict:
     return {}
 
 
-COPY_PASTE_PROB = 0.75  # Tier 1.2: probability of applying copy-paste per sample
+COPY_PASTE_PROB = 0.5   # Tier 1.2: probability of applying copy-paste per sample
 
 
 class LitterDataset(Dataset):
