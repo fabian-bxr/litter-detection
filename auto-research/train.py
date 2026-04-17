@@ -49,7 +49,7 @@ BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
 ACCUM_STEPS      = 1          # gradient accumulation (1 = disabled)
 LR               = 2e-4
-WEIGHT_DECAY     = 1e-4
+WEIGHT_DECAY     = 3e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
 DROPOUT          = 0.1
