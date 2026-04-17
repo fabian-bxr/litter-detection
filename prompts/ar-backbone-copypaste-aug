@@ -23,3 +23,6 @@ The @program.md file should not be updated by the agents. After each training ru
 Run the effv2s with longer training again and report the results, read the
   @auto-research/program.md for this
 
+When looking at the @auto-research/analysis.ipynb notebook, i can see that a lot of samples have 0 IoU when validating. When vieweing the ones that have 0 IoU, there are a few of the masks that are also rotated or even incorrect and other
+  problematic areas are small objects. What can be done about this architecture wise and dataset wise?
+Fix the EXIF Image Bug
