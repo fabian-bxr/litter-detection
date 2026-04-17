@@ -817,9 +817,9 @@ def train(run_name: str, epochs: int, seed: int = SEED):
     # Tier 1 step 1: smp DeepLabV3+ with MiT-B0 encoder.
     # MiT-B0 (~3.7M params) is more sample-efficient than ImageNet ResNets on
     # small datasets; DeepLabV3+ adds ASPP for multi-scale context.
-    model_name = "smp.DeepLabV3Plus(mobilenetv3_large_100)"
+    model_name = "smp.DeepLabV3Plus(mit_b1)"
     model = smp.DeepLabV3Plus(
-        encoder_name="tu-mobilenetv3_large_100",
+        encoder_name="mit_b1",
         encoder_weights="imagenet",
         in_channels=3,
         classes=1,
@@ -867,7 +867,7 @@ def train(run_name: str, epochs: int, seed: int = SEED):
             "crop_size":         CROP_SIZE,
             "lr":                LR,
             "weight_decay":      WEIGHT_DECAY,
-            "encoder_channels":  "mobilenetv3_large_100-pretrained",
+            "encoder_channels":  "mit_b1-pretrained",
             "decoder_channels":  "DeepLabV3Plus",
             "dropout":           DROPOUT,
             "copy_paste_prob":   COPY_PASTE_PROB,
