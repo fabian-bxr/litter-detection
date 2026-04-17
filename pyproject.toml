@@ -2,7 +2,7 @@
 name = "autoresearcher-litter-detection"
 version = "0.1.0"
 description = "Autonomous CNN training for litter segmentation"
-requires-python = ">=3.11"
+requires-python = "==3.11.*"
 dependencies = [
     "torch>=2.3.0",
     "torchvision>=0.18.0",
@@ -30,6 +30,7 @@ dependencies = [
     "opentelemetry-api>=1.40.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.40.0",
     "pandas-stubs~=2.3.3",
+    "ultralytics>=8.4.38",
 ]
 
 [project.scripts]
@@ -37,6 +38,18 @@ camera = "litter_detector.camera.main:main"
 detector = "litter_detector.detector.main:main"
 
 [tool.uv]
+find-links = []
+prerelease = "allow"
+environments = ["sys_platform == 'win32'"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/nightly/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
 
 [build-system]
 requires = ["hatchling"]
