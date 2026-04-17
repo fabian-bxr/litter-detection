@@ -48,7 +48,7 @@ SEED             = 42         # RNG seed for reproducibility across runs
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
 ACCUM_STEPS      = 1          # gradient accumulation (1 = disabled)
-LR               = 5e-4
+LR               = 2e-4
 WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
 DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
@@ -842,7 +842,7 @@ def train(run_name: str, epochs: int, seed: int = SEED):
         max_lr=LR,
         steps_per_epoch=optim_steps_per_epoch,
         epochs=epochs,
-        pct_start=0.05,
+        pct_start=0.1,
     )
     criterion = CombinedLoss(pos_weight=pos_weight).to(device)
 
