@@ -15,9 +15,9 @@ Other approaches fine-tune a yolo model: e.g. see for https://github.com/jeremy-
 
 ## Example images not in the dataset
 
-|No litter | Litter |
-|---|---|
-|![](docs/images/Image2.jpeg) | ![](docs/images/Image3.jpeg) |
+| No litter                    | Litter                       |
+|------------------------------|------------------------------|
+| ![](docs/images/Image2.jpeg) | ![](docs/images/Image3.jpeg) |
 
 ## Autoresearch Content
 
