@@ -18,6 +18,7 @@ Usage:
 """
 
 import argparse
+import copy
 import json
 import os
 import random
@@ -26,6 +27,7 @@ from pathlib import Path
 
 import mlflow
 import mlflow.pytorch
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
@@ -34,6 +36,7 @@ from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torchvision.models as tv_models
+import segmentation_models_pytorch as smp
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 from tqdm import tqdm
@@ -44,6 +47,7 @@ EPOCHS           = 20         # epochs of training per run (hardware-independent
 SEED             = 42         # RNG seed for reproducibility across runs
 BATCH_SIZE       = 8
 CROP_SIZE        = 384        # random-crop spatial resolution during training
+ACCUM_STEPS      = 1          # gradient accumulation (1 = disabled)
 LR               = 2e-4
 WEIGHT_DECAY     = 1e-4
 ENCODER_CHANNELS = [64, 128, 256, 512]   # U-Net encoder stage widths
@@ -51,6 +55,8 @@ DECODER_CHANNELS = [256, 128, 64, 32]    # U-Net decoder stage widths
 DROPOUT          = 0.1
 POS_WEIGHT       = 5.0        # BCEWithLogitsLoss pos_weight (handles class imbalance)
                                # override with value from data/meta.json
+EMA_DECAY        = 0.999      # exponential moving average of model weights for eval
+TTA_HFLIP        = True       # horizontal-flip test-time augmentation at validation
 
 # ── Data ──────────────────────────────────────────────────────────────────────
 
@@ -67,6 +73,9 @@ def load_meta() -> dict:
     if p.exists():
         return json.loads(p.read_text())
     return {}
+
+
+COPY_PASTE_PROB = 0.5   # Tier 1.2: probability of applying copy-paste per sample
 
 
 class LitterDataset(Dataset):
@@ -101,11 +110,67 @@ class LitterDataset(Dataset):
     def __len__(self):
         return len(self.stems)
 
+    def _load_raw(self, stem: str):
+        image = np.array(Image.open(IMAGES_DIR / f"{stem}.jpg").convert("RGB"))
+        mask  = (np.array(Image.open(MASKS_DIR / f"{stem}.png")) > 127).astype(np.uint8)
+        return image, mask
+
+    def _copy_paste(self, image: np.ndarray, mask: np.ndarray):
+        """
+        Sample a second (image, mask), find connected components in its mask,
+        and paste each component onto the current image with small affine
+        jitter (rotation + scale + translation). OR the pasted regions into
+        the current mask. Operates in uint8 pixel space, before A.Normalize.
+        """
+        idx2 = random.randrange(len(self.stems))
+        src_img, src_mask = self._load_raw(self.stems[idx2])
+
+        # Resize source to match destination so component coordinates align
+        h, w = image.shape[:2]
+        src_img  = cv2.resize(src_img,  (w, h), interpolation=cv2.INTER_LINEAR)
+        src_mask = cv2.resize(src_mask, (w, h), interpolation=cv2.INTER_NEAREST)
+
+        n_comp, comp_labels = cv2.connectedComponents(src_mask)
+        if n_comp <= 1:
+            return image, mask  # source has no foreground
+
+        out_img  = image.copy()
+        out_mask = mask.copy()
+        for cid in range(1, n_comp):
+            comp = (comp_labels == cid).astype(np.uint8)
+            if comp.sum() < 32:        # skip tiny noise blobs
+                continue
+            # Per-component affine jitter
+            angle = random.uniform(-25, 25)
+            scale = random.uniform(0.7, 1.3)
+            tx    = random.uniform(-0.15, 0.15) * w
+            ty    = random.uniform(-0.15, 0.15) * h
+            M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, scale)
+            M[0, 2] += tx
+            M[1, 2] += ty
+            warped_comp = cv2.warpAffine(
+                comp, M, (w, h), flags=cv2.INTER_NEAREST,
+                borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+            )
+            if warped_comp.sum() == 0:
+                continue
+            warped_img = cv2.warpAffine(
+                src_img, M, (w, h), flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT,
+            )
+            region = warped_comp.astype(bool)
+            out_img[region]  = warped_img[region]
+            out_mask[region] = 1
+        return out_img, out_mask
+
     def __getitem__(self, idx):
         stem = self.stems[idx]
-        image = np.array(Image.open(IMAGES_DIR / f"{stem}.jpg").convert("RGB"))
-        mask  = (np.array(Image.open(MASKS_DIR / f"{stem}.png")) > 127).astype(np.float32)
+        image, mask = self._load_raw(stem)
 
+        if self.augment and random.random() < COPY_PASTE_PROB:
+            image, mask = self._copy_paste(image, mask)
+
+        mask = mask.astype(np.float32)
         out = self.transform(image=image, mask=mask)
         return out["image"], out["mask"].unsqueeze(0)   # (3,H,W), (1,H,W)
 
@@ -647,27 +712,58 @@ class EfficientNetB4UNet(nn.Module):
 # ── Loss ──────────────────────────────────────────────────────────────────────
 
 class CombinedLoss(nn.Module):
-    """BCE + Dice loss (equal weight) with label smoothing."""
+    """BCE (with label smoothing) + Lovász-Softmax (binary).
+
+    Lovász directly optimises the IoU surrogate, which is the eval metric.
+    Equal weighting (0.5 / 0.5) matches the recipe from the program plan.
+    """
     def __init__(self, pos_weight: float = POS_WEIGHT, label_smoothing: float = 0.01):
         super().__init__()
         self.bce = nn.BCEWithLogitsLoss(
             pos_weight=torch.tensor([pos_weight])
         )
+        self.lovasz = smp.losses.LovaszLoss(mode="binary", from_logits=True)
         self.label_smoothing = label_smoothing
 
-    def dice_loss(self, logits, targets, smooth: float = 1.0):
-        probs = torch.sigmoid(logits)
-        num   = 2 * (probs * targets).sum() + smooth
-        den   = probs.sum() + targets.sum() + smooth
-        return 1 - num / den
-
     def forward(self, logits, targets):
-        # Apply label smoothing: shift targets away from 0 and 1
         if self.label_smoothing > 0:
             targets_smooth = targets * (1.0 - self.label_smoothing) + 0.5 * self.label_smoothing
         else:
             targets_smooth = targets
-        return self.bce(logits, targets_smooth) + self.dice_loss(logits, targets)
+        return 0.1 * self.bce(logits, targets_smooth) + 0.9 * self.lovasz(logits, targets)
+
+
+# ── EMA ───────────────────────────────────────────────────────────────────────
+
+class ModelEma:
+    """Exponential moving average of model parameters (Polyak averaging).
+
+    Buffers (e.g. BN running stats) are copied directly each step.
+    """
+    def __init__(self, model: nn.Module, decay: float = EMA_DECAY):
+        self.module = copy.deepcopy(model).eval()
+        for p in self.module.parameters():
+            p.requires_grad_(False)
+        self.decay = decay
+
+    @torch.no_grad()
+    def update(self, model: nn.Module) -> None:
+        d = self.decay
+        for ema_p, p in zip(self.module.parameters(), model.parameters()):
+            ema_p.mul_(d).add_(p.detach(), alpha=1.0 - d)
+        for ema_b, b in zip(self.module.buffers(), model.buffers()):
+            ema_b.copy_(b)
+
+
+@torch.no_grad()
+def forward_with_tta(model: nn.Module, images: torch.Tensor,
+                     hflip: bool = True) -> torch.Tensor:
+    logits = model(images)
+    if hflip:
+        flipped = torch.flip(images, dims=[3])
+        logits_f = torch.flip(model(flipped), dims=[3])
+        logits = (logits + logits_f) / 2
+    return logits
 
 
 # ── Metrics ───────────────────────────────────────────────────────────────────
@@ -718,19 +814,33 @@ def train(run_name: str, epochs: int, seed: int = SEED):
                               persistent_workers=True)
 
     # ── Model ─────────────────────────────────────────────────────────────
-    model_class = ResNet34UNet
-    model = model_class(dropout=DROPOUT).to(device)
+    # Tier 1 step 1: smp DeepLabV3+ with MiT-B0 encoder.
+    # MiT-B0 (~3.7M params) is more sample-efficient than ImageNet ResNets on
+    # small datasets; DeepLabV3+ adds ASPP for multi-scale context.
+    model_name = "smp.DeepLabV3Plus(efficientnetv2_s)"
+    model = smp.DeepLabV3Plus(
+        encoder_name="tu-tf_efficientnetv2_s",
+        encoder_weights="imagenet",
+        in_channels=3,
+        classes=1,
+    ).to(device)
 
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {total_params:,}")
 
+    # ── EMA copy (Tier 1.3) ───────────────────────────────────────────────
+    ema = ModelEma(model, decay=EMA_DECAY)
+
     # ── Optimizer + Schedule ──────────────────────────────────────────────
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR,
                                   weight_decay=WEIGHT_DECAY)
+    # OneCycleLR step count must match actual optimizer.step() calls when
+    # gradient accumulation is in use.
+    optim_steps_per_epoch = (len(train_loader) + ACCUM_STEPS - 1) // ACCUM_STEPS
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=LR,
-        steps_per_epoch=len(train_loader),
+        steps_per_epoch=optim_steps_per_epoch,
         epochs=epochs,
         pct_start=0.05,
     )
@@ -738,30 +848,35 @@ def train(run_name: str, epochs: int, seed: int = SEED):
 
     # ── MLflow ────────────────────────────────────────────────────────────
     mlflow.set_tracking_uri(f"sqlite:///{REPO_ROOT / 'mlflow.db'}")
-    experiment_name = "litter-segmentation"
+    experiment_name = "litter-segmentation-v2"
     if mlflow.get_experiment_by_name(experiment_name) is None:
         mlflow.create_experiment(
             experiment_name,
             artifact_location=(REPO_ROOT / "mlartifacts").as_uri(),
         )
     mlflow.set_experiment(experiment_name)
-    mlflow.config.enable_system_metrics_logging()
+    mlflow.pytorch.autolog(log_models=True)
     with mlflow.start_run(run_name=run_name, log_system_metrics=True):
         mlflow.set_tags({
-            "model_class": model_class.__name__,
+            "model_class": model_name,
         })
         mlflow.log_params({
             "batch_size":        BATCH_SIZE,
+            "accum_steps":       ACCUM_STEPS,
+            "effective_batch":   BATCH_SIZE * ACCUM_STEPS,
             "crop_size":         CROP_SIZE,
             "lr":                LR,
             "weight_decay":      WEIGHT_DECAY,
-            "encoder_channels":  "ResNet34-pretrained",
-            "decoder_channels":  str(DECODER_CHANNELS),
+            "encoder_channels":  "tf_efficientnetv2_s-pretrained",
+            "decoder_channels":  "DeepLabV3Plus",
             "dropout":           DROPOUT,
+            "copy_paste_prob":   COPY_PASTE_PROB,
+            "ema_decay":         EMA_DECAY,
+            "tta_hflip":         TTA_HFLIP,
             "pos_weight":        pos_weight,
             "optimizer":         "AdamW",
             "scheduler":         "OneCycleLR",
-            "loss":              "BCE+Dice",
+            "loss":              "0.1*BCE+0.9*Lovasz",
             "total_params":      total_params,
             "device":            str(device),
             "epochs":            epochs,
@@ -779,17 +894,23 @@ def train(run_name: str, epochs: int, seed: int = SEED):
             epoch_start = time.time()
             samples_seen = 0
 
-            for images, masks in train_loader:
+            optimizer.zero_grad(set_to_none=True)
+            for batch_idx, (images, masks) in enumerate(train_loader):
                 images = images.to(device, non_blocking=True)
                 masks  = masks.to(device,  non_blocking=True)
 
-                optimizer.zero_grad(set_to_none=True)
                 logits = model(images)
                 loss   = criterion(logits, masks)
-                loss.backward()
-                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
-                scheduler.step()
+                (loss / ACCUM_STEPS).backward()
+
+                is_step = (batch_idx + 1) % ACCUM_STEPS == 0 \
+                          or (batch_idx + 1) == len(train_loader)
+                if is_step:
+                    nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                    optimizer.step()
+                    scheduler.step()
+                    ema.update(model)
+                    optimizer.zero_grad(set_to_none=True)
 
                 train_loss += loss.item()
                 train_iou  += compute_iou(logits, masks)
@@ -799,15 +920,15 @@ def train(run_name: str, epochs: int, seed: int = SEED):
             epoch_time = time.time() - epoch_start
             samples_per_s = samples_seen / max(epoch_time, 1e-6)
 
-            # ── Validation ────────────────────────────────────────────
-            model.eval()
+            # ── Validation (EMA weights + h-flip TTA) ─────────────────
+            ema.module.eval()
             val_loss = 0.0
             val_iou  = 0.0
             with torch.no_grad():
                 for images, masks in val_loader:
                     images = images.to(device, non_blocking=True)
                     masks  = masks.to(device,  non_blocking=True)
-                    logits = model(images)
+                    logits = forward_with_tta(ema.module, images, hflip=TTA_HFLIP)
                     val_loss += criterion(logits, masks).item()
                     val_iou  += compute_iou(logits, masks)
 
@@ -829,7 +950,8 @@ def train(run_name: str, epochs: int, seed: int = SEED):
 
             if val_iou / max(n_val, 1) > best_val_iou:
                 best_val_iou = val_iou / max(n_val, 1)
-                torch.save(model.state_dict(), MODELS_DIR / "best_model.pth")
+                # Save EMA weights — those are what we evaluated and what we export.
+                torch.save(ema.module.state_dict(), MODELS_DIR / "best_model.pth")
 
             print(
                 f"epoch {epoch:3d}/{epochs}  "
@@ -844,18 +966,19 @@ def train(run_name: str, epochs: int, seed: int = SEED):
 
         best_ckpt = MODELS_DIR / "best_model.pth"
         if best_ckpt.exists():
-            model.load_state_dict(torch.load(best_ckpt, map_location=device))
+            # Reload best EMA weights for logging + ONNX export.
+            ema.module.load_state_dict(torch.load(best_ckpt, map_location=device))
             mlflow.pytorch.log_model(
-                model,
+                ema.module,
                 name="model",
                 registered_model_name="litter-segmentation",
             )
 
             onnx_path = MODELS_DIR / "best_model.onnx"
-            model.eval()
+            ema.module.eval()
             dummy = torch.randn(1, 3, CROP_SIZE, CROP_SIZE, device=device)
             torch.onnx.export(
-                model,
+                ema.module,
                 dummy,
                 onnx_path,
                 input_names=["input"],
