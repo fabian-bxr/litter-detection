@@ -19,9 +19,17 @@ class CameraTopics(msgspec.Struct, frozen=True):
     frame: str  # Post-processed camera frame from selected source
 
 
+class RobotTopics(msgspec.Struct, frozen=True):
+    odometry: str  # OdometryState published by go2 bridge
+    occupancy: str  # OccupancyGrid published by occupancy node
+    nav_request: str  # NavigationRequest sent to nav manager
+    nav_status: str  # NavigationStatus published by nav manager
+
+
 class Topics(msgspec.Struct, frozen=True):
     detection: DetectionTopics
     camera: CameraTopics
+    robot: RobotTopics
 
 
 TOPICS = Topics(
@@ -32,6 +40,12 @@ TOPICS = Topics(
         detections="litter/detection",
     ),
     camera=CameraTopics(go2_camera="robodog/sensors/go2_camera", frame="camera/frame"),
+    robot=RobotTopics(
+        odometry="robodog/system_state/odometry",
+        occupancy="robodog/map/occupancy",
+        nav_request="nav/request",
+        nav_status="nav/status",
+    ),
 )
 
 
