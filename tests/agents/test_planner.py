@@ -143,14 +143,21 @@ def test_step_handles_grid_resize_mid_mission() -> None:
 def test_step_handles_nav_failure() -> None:
     pose, occ, nav = _setup()
     nav.default_state = "failed"
-    params = NBVParams(coverage_target=0.99, max_iterations=5)
+    params = NBVParams(coverage_target=0.99, max_iterations=20)
     core = PlannerCore(pose, occ, nav, params=params)
     area = SearchArea(
         polygon=rect_around(4.0, 4.0, 2.0, 2.0),
         anchor_pose=Pose(x=4.0, y=4.0, theta=0.0),
     )
     core.start(area)
-    status = core.step()
+    # First few nav failures should be soft retries, not terminal.
+    s1 = core.step()
+    assert s1.state == "planning", s1.last_message
+    # After enough consecutive nav failures the mission gives up.
+    for _ in range(10):
+        status = core.step()
+        if status.state in ("failed", "blocked", "aborted", "completed"):
+            break
     assert status.state == "failed"
     assert "nav" in status.last_message
 

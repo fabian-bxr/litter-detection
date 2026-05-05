@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import threading
 import uuid
-from pathlib import Path
 from typing import Any, Protocol
 
 import numpy as np
@@ -39,6 +38,10 @@ class _NavSink(Protocol):
     ) -> NavResult | None: ...
 
 
+class _DebugSink(Protocol):
+    def put(self, payload: bytes, /) -> None: ...
+
+
 _NAV_TIMEOUT_S = 30.0
 
 
@@ -60,7 +63,7 @@ class PlannerCore:
         params: NBVParams | None = None,
         rng_seed: int = 0,
         nav_timeout_s: float = _NAV_TIMEOUT_S,
-        debug_dir: Path | None = None,
+        debug_publisher: _DebugSink | None = None,
     ) -> None:
         self._pose = pose
         self._occ = occupancy
@@ -68,14 +71,17 @@ class PlannerCore:
         self._params = params or NBVParams()
         self._rng = np.random.default_rng(rng_seed)
         self._nav_timeout_s = nav_timeout_s
-        self._debug_dir = debug_dir
+        self._debug_publisher = debug_publisher
 
         self._lock = threading.Lock()
+        self._seen_lock = threading.Lock()
         self._abort = threading.Event()
         self._area: SearchArea | None = None
         self._seen: SeenMask | None = None
         self._target_mask: np.ndarray | None = None
         self._status = MissionStatus(mission_id="", state="idle")
+        self._consecutive_nav_failures = 0
+        self._max_consecutive_nav_failures = 3
 
     # ----- public API ---------------------------------------------------
 
@@ -99,7 +105,7 @@ class PlannerCore:
             return self._set_failed("no occupancy grid available")
         self._area = area
         self._seen = SeenMask(grid)
-        self._target_mask = polygon_mask(grid, area.polygon) & grid.free_mask()
+        self._target_mask = polygon_mask(grid, area.polygon) & ~grid.occupied_mask()
         target_count = int(self._target_mask.sum())
         if target_count == 0:
             return self._set_failed("search polygon contains no free cells")
@@ -133,21 +139,10 @@ class PlannerCore:
         grid = self._occ.get(timeout=2.0)
         if grid is None:
             return self._set_failed("no occupancy grid available")
-        if not self._seen.matches(grid):
-            logger.info(
-                f"occupancy grid geometry changed "
-                f"({self._seen.shape} @ res={self._seen.resolution} → "
-                f"({grid.height},{grid.width}) @ res={grid.resolution}); rebinding"
-            )
-            self._seen.rebind(grid)
-            self._target_mask = (
-                polygon_mask(grid, self._area.polygon) & grid.free_mask()
-            )
+        self._ingest(pose, grid)
 
-        # Always update seen mask from where we currently are.
-        self._seen.update(pose, grid, self._params)
-
-        coverage = self._seen.coverage_inside(self._target_mask)
+        with self._seen_lock:
+            coverage = self._seen.coverage_inside(self._target_mask)
         if coverage >= self._params.coverage_target:
             return self._set_state(
                 state="completed",
@@ -163,10 +158,12 @@ class PlannerCore:
                 message=f"max iterations ({self._params.max_iterations}) reached",
             )
 
-        unseen = self._target_mask & ~self._seen.mask
+        with self._seen_lock:
+            unseen = self._target_mask & ~self._seen.mask
         safe = grid.inflate_obstacles(self._params.obstacle_inflation_m)
         positions = sample_candidate_positions(
-            pose, grid, self._area.polygon, self._params, self._rng, safe
+            pose, grid, self._area.polygon, self._params, self._rng, safe,
+            unseen_mask=unseen,
         )
         candidates = score_candidates(pose, positions, grid, self._params, unseen)
         choice = best_candidate(candidates)
@@ -195,35 +192,71 @@ class PlannerCore:
             current_target=choice.pose,
         )
         request_id = self._nav.submit(choice.pose)
-        nav_result = self._nav.wait_for_terminal(request_id, timeout=self._nav_timeout_s)
+        stop_streamer = threading.Event()
+        streamer = threading.Thread(
+            target=self._stream_seen_updates,
+            args=(stop_streamer,),
+            daemon=True,
+            name="planner-seen-stream",
+        )
+        streamer.start()
+        try:
+            nav_result = self._nav.wait_for_terminal(
+                request_id, timeout=self._nav_timeout_s
+            )
+        finally:
+            stop_streamer.set()
+            streamer.join(timeout=1.0)
 
-        if nav_result is None:
+        if nav_result is None or (
+            nav_result.state != "arrived_final" and nav_result.state != "blocked"
+        ):
+            # Soft retry: keep the seen mask we accumulated during motion (the
+            # streamer was running) and replan from the current pose. The mission
+            # only fails after `_max_consecutive_nav_failures` strikes in a row.
+            self._consecutive_nav_failures += 1
+            with self._seen_lock:
+                coverage = self._seen.coverage_inside(self._target_mask)
+            reason = "nav timed out" if nav_result is None else f"nav state={nav_result.state}"
+            if (
+                self._consecutive_nav_failures
+                >= self._max_consecutive_nav_failures
+            ):
+                return self._set_state(
+                    state="failed",
+                    coverage=coverage,
+                    iteration=iteration,
+                    message=f"{reason} ({self._consecutive_nav_failures}x); giving up",
+                )
+            logger.warning(
+                f"{reason} (strike {self._consecutive_nav_failures}/"
+                f"{self._max_consecutive_nav_failures}); replanning from current pose"
+            )
             return self._set_state(
-                state="failed",
+                state="planning",
                 coverage=coverage,
                 iteration=iteration,
-                message="nav timed out",
+                message=f"{reason}; replanning",
             )
         if nav_result.state == "blocked":
+            self._consecutive_nav_failures = 0
             return self._set_state(
                 state="blocked",
                 coverage=coverage,
                 iteration=iteration,
                 message="nav reported blocked",
             )
-        if nav_result.state != "arrived_final":
-            return self._set_state(
-                state="failed",
-                coverage=coverage,
-                iteration=iteration,
-                message=f"nav state={nav_result.state}",
-            )
+        # arrived_final: clear the strike counter.
+        self._consecutive_nav_failures = 0
 
-        # Re-cast FOV from the actual final pose.
+        # Re-cast FOV from the actual final pose, with a fresh grid snapshot.
         final_pose = nav_result.final_pose if nav_result.final_pose is not None else pose
+        final_grid = self._occ.get(timeout=1.0) or grid
         if nav_result.final_pose is not None:
-            self._seen.update(nav_result.final_pose, grid, self._params)
-        coverage = self._seen.coverage_inside(self._target_mask)
+            self._ingest(nav_result.final_pose, final_grid)
+        with self._seen_lock:
+            coverage = self._seen.coverage_inside(self._target_mask)
+        grid = final_grid
         self._maybe_render_debug(
             grid=grid,
             polygon=self._area.polygon,
@@ -251,6 +284,47 @@ class PlannerCore:
         )
 
     # ----- helpers ------------------------------------------------------
+
+    def _ingest(self, pose: Pose, grid: OccupancyGrid) -> None:
+        """Atomically: rebind on geometry change, recompute target, OR FOV wedge.
+
+        Holds `_seen_lock` so concurrent readers (status, scoring) and the
+        streaming updater see a consistent (mask, target, geometry) triple.
+        Target = polygon AND not-known-occupied; unknown cells count as
+        to-be-covered and are marked seen as the FOV raycast sweeps them.
+        """
+        if self._area is None or self._seen is None:
+            return
+        with self._seen_lock:
+            if not self._seen.matches(grid):
+                logger.debug(
+                    f"grid geometry changed "
+                    f"({self._seen.shape} → ({grid.height},{grid.width})); rebinding"
+                )
+                self._seen.rebind(grid)
+            self._target_mask = (
+                polygon_mask(grid, self._area.polygon) & ~grid.occupied_mask()
+            )
+            self._seen.update(pose, grid, self._params)
+
+    def _stream_seen_updates(self, stop: threading.Event) -> None:
+        """Poll pose+grid while nav is in flight and fold them into the seen mask.
+
+        Runs at ~10 Hz. Skips iterations where pose or grid is unavailable.
+        Exits when `stop` is set (called from `step()` after nav terminates).
+        """
+        period_s = 0.1
+        while not stop.is_set():
+            if self._abort.is_set():
+                return
+            p = self._pose.get(timeout=period_s)
+            g = self._occ.get(timeout=period_s)
+            if p is not None and g is not None:
+                try:
+                    self._ingest(p, g)
+                except Exception as e:
+                    logger.warning(f"streaming seen-update failed: {e}")
+            stop.wait(period_s)
 
     def _set_state(
         self,
@@ -283,18 +357,22 @@ class PlannerCore:
         iteration: int,
         coverage: float,
     ) -> None:
-        if self._debug_dir is None or self._seen is None or self._target_mask is None:
+        if (
+            self._debug_publisher is None
+            or self._seen is None
+            or self._target_mask is None
+        ):
             return
         try:
-            from litter_detector.agents.nbv.visualize import render_debug_png
+            from litter_detector.agents.nbv.visualize import render_debug_jpeg
 
-            mid = self._status.mission_id or "mission"
-            out = self._debug_dir / mid / f"iter_{iteration:03d}.png"
-            render_debug_png(
-                out_path=out,
+            with self._seen_lock:
+                seen_snapshot = self._seen.mask.copy()
+                target_snapshot = self._target_mask.copy()
+            jpeg = render_debug_jpeg(
                 grid=grid,
-                seen_mask=self._seen.mask,
-                target_mask=self._target_mask,
+                seen_mask=seen_snapshot,
+                target_mask=target_snapshot,
                 polygon=polygon,
                 pose=pose,
                 candidates=candidates,
@@ -302,8 +380,9 @@ class PlannerCore:
                 iteration=iteration,
                 coverage=coverage,
             )
+            self._debug_publisher.put(jpeg)
         except Exception as e:
-            logger.warning(f"debug render failed: {e}")
+            logger.warning(f"debug render/publish failed: {e}")
 
     def _set_failed(self, message: str) -> MissionStatus:
         with self._lock:

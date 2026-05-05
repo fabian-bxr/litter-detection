@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from pathlib import Path
 
 from loguru import logger
 
@@ -52,10 +51,9 @@ def main() -> None:
         help="Frontend (only 'repl' for now; AG-UI deferred)",
     )
     parser.add_argument(
-        "--debug-dir",
-        type=Path,
-        default=None,
-        help="If set, save per-iteration debug PNGs to this directory.",
+        "--no-debug-publish",
+        action="store_true",
+        help="Disable publishing per-iteration NBV debug JPEGs to Zenoh.",
     )
     parser.add_argument(
         "--no-mlflow", action="store_true", help="Disable MLflow tracing."
@@ -67,7 +65,9 @@ def main() -> None:
 
     cfg = AgentsConfig()
     model = ollama_model(cfg.mission)
-    runner, pose, occ, nav = build_default_runner(debug_dir=args.debug_dir)
+    runner, pose, occ, nav, debug_pub = build_default_runner(
+        publish_debug=not args.no_debug_publish
+    )
     deps = MissionDeps(pose=pose, runner=runner)
     agent = build_mission_agent(model)
     logger.info(f"Mission Agent ready (model={cfg.mission.model})")
@@ -81,6 +81,8 @@ def main() -> None:
         pose.close()
         occ.close()
         nav.close()
+        if debug_pub is not None:
+            debug_pub.close()
 
 
 if __name__ == "__main__":

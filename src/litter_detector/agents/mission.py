@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
+import zenoh
 from loguru import logger
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models import Model
@@ -22,6 +22,7 @@ from litter_detector.agents.planner import PlannerCore, PlannerRunner
 from litter_detector.agents.tools.nav import NavClient
 from litter_detector.agents.tools.occupancy import OccupancyClient
 from litter_detector.agents.tools.pose import PoseClient
+from litter_detector.config import Settings
 
 
 class _PoseSrc(Protocol):
@@ -124,13 +125,52 @@ def ollama_model(cfg: AgentLLM) -> OpenAIChatModel:
     return OpenAIChatModel(model_name=cfg.model, provider=provider)
 
 
+class DebugPublisher:
+    """Owns a Zenoh session + publisher for NBV debug JPEGs.
+
+    Mirrors `CameraPublisher`: the session is held on `self` so it survives
+    after `build_default_runner` returns (otherwise it'd be GC'd and the
+    publisher would log 'session closed' on every put).
+    """
+
+    def __init__(self, key_expr: str) -> None:
+        self.session = zenoh.open(Settings.zenoh_config())
+        self.publisher = self.session.declare_publisher(
+            key_expr=key_expr,
+            encoding=zenoh.Encoding.IMAGE_JPEG,
+        )
+        logger.info(f"NBV debug publisher on {key_expr} (image/jpeg)")
+
+    def put(self, payload: bytes) -> None:
+        self.publisher.put(payload)
+
+    def close(self) -> None:
+        try:
+            self.publisher.undeclare()
+        finally:
+            self.session.close()
+
+
 def build_default_runner(
     nbv_params: NBVParams | None = None,
-    debug_dir: Path | None = None,
-) -> tuple[PlannerRunner, PoseClient, OccupancyClient, NavClient]:
-    """Wire up the Zenoh-backed runner. Caller owns the lifecycle of returned clients."""
+    publish_debug: bool = True,
+) -> tuple[
+    PlannerRunner,
+    PoseClient,
+    OccupancyClient,
+    NavClient,
+    DebugPublisher | None,
+]:
+    """Wire up the Zenoh-backed runner. Caller owns the lifecycle of returned clients.
+
+    When `publish_debug` is True, NBV debug snapshots are JPEG-encoded and
+    published to `Topics.agent.nbv_debug` with `Encoding.IMAGE_JPEG`.
+    """
     pose = PoseClient()
     occ = OccupancyClient()
     nav = NavClient()
-    core = PlannerCore(pose, occ, nav, params=nbv_params, debug_dir=debug_dir)
-    return PlannerRunner(core), pose, occ, nav
+    debug_pub: DebugPublisher | None = None
+    if publish_debug:
+        debug_pub = DebugPublisher(Settings.topics().agent.nbv_debug)
+    core = PlannerCore(pose, occ, nav, params=nbv_params, debug_publisher=debug_pub)
+    return PlannerRunner(core), pose, occ, nav, debug_pub

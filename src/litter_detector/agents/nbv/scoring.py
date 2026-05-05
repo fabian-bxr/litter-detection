@@ -41,7 +41,7 @@ def score_candidates(
 ) -> list[Candidate]:
     """Score each candidate position. Orientation is chosen to maximize gain.
 
-    `unseen_target` = (polygon_mask & free_mask) & ~seen — the cells we still
+    `unseen_target` = (polygon_mask & ~occupied_mask) & ~seen — the cells we still
     care about covering. Gain is normalized by its total at scoring time, so
     score = gain - lambda * cost is unitless.
     """

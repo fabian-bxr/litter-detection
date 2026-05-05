@@ -109,15 +109,25 @@ def test_candidates_stay_in_polygon_and_safe_region() -> None:
     params = NBVParams(n_candidates=8, candidate_step_m=1.0)
     poly = rect_around(5.0, 5.0, width=4.0, height=4.0)
     safe = grid.inflate_obstacles(0.0)
+    target = polygon_mask(grid, poly) & grid.free_mask()
     rng = np.random.default_rng(42)
     positions = sample_candidate_positions(
-        Pose(x=5.0, y=5.0, theta=0.0), grid, poly, params, rng, safe
+        Pose(x=5.0, y=5.0, theta=0.0),
+        grid,
+        poly,
+        params,
+        rng,
+        safe,
+        unseen_mask=target,
     )
     assert len(positions) > 0
     for x, y in positions:
+        # Inside the 4x4 polygon centered on (5,5).
         assert 3.0 <= x <= 7.0
         assert 3.0 <= y <= 7.0
-        assert math.hypot(x - 5.0, y - 5.0) <= 1.0 + 1e-6
+        # Frontier-biased sampling spreads candidates beyond the old 1 m disc;
+        # we just require at least some non-trivial step from the current pose.
+        assert math.hypot(x - 5.0, y - 5.0) >= 0.4
 
 
 def test_score_picks_orientation_into_unseen() -> None:

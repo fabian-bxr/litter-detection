@@ -77,7 +77,8 @@ class SeenMask:
     def coverage_inside(self, target_mask: np.ndarray) -> float:
         """Fraction of `target_mask` cells that are also seen.
 
-        `target_mask` is typically `polygon_mask & free_mask`.
+        `target_mask` is typically `polygon_mask & ~occupied_mask` so unknown
+        cells inside the polygon also count toward coverage.
         """
         total = int(target_mask.sum())
         if total == 0:

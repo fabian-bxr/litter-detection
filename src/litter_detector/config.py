@@ -26,10 +26,15 @@ class RobotTopics(msgspec.Struct, frozen=True):
     nav_status: str  # NavigationStatus published by nav manager
 
 
+class AgentTopics(msgspec.Struct, frozen=True):
+    nbv_debug: str  # NBV planner debug visualization (JPEG)
+
+
 class Topics(msgspec.Struct, frozen=True):
     detection: DetectionTopics
     camera: CameraTopics
     robot: RobotTopics
+    agent: AgentTopics
 
 
 TOPICS = Topics(
@@ -46,6 +51,7 @@ TOPICS = Topics(
         nav_request="nav/request",
         nav_status="nav/status",
     ),
+    agent=AgentTopics(nbv_debug="agent/nbv/debug"),
 )
 
 

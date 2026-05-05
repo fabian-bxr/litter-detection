@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 
 from litter_detector.agents.models import Candidate, NBVParams, Pose, SearchArea
 from litter_detector.agents.nbv.geometry import polygon_mask, rect_around
-from litter_detector.agents.nbv.visualize import render_debug_png
+from litter_detector.agents.nbv.visualize import render_debug_jpeg
 from litter_detector.agents.planner import PlannerCore
 from litter_detector.agents.tools.nav import FakeNavClient
 from litter_detector.agents.tools.occupancy import FakeOccupancyClient, OccupancyGrid
@@ -22,7 +20,7 @@ def _grid() -> OccupancyGrid:
     )
 
 
-def test_render_debug_png_writes_file(tmp_path: Path) -> None:
+def test_render_debug_jpeg_returns_jpeg_bytes() -> None:
     grid = _grid()
     polygon = rect_around(2.0, 2.0, 2.0, 2.0)
     target = polygon_mask(grid, polygon) & grid.free_mask()
@@ -32,9 +30,7 @@ def test_render_debug_png_writes_file(tmp_path: Path) -> None:
         Candidate(pose=Pose(x=2.5, y=2.0, theta=0.0), gain=0.1, cost_m=0.5, score=0.05),
         Candidate(pose=Pose(x=2.0, y=2.5, theta=1.5), gain=0.2, cost_m=0.5, score=0.18),
     ]
-    out = tmp_path / "iter_001.png"
-    render_debug_png(
-        out_path=out,
+    blob = render_debug_jpeg(
         grid=grid,
         seen_mask=seen,
         target_mask=target,
@@ -45,11 +41,14 @@ def test_render_debug_png_writes_file(tmp_path: Path) -> None:
         iteration=1,
         coverage=0.0,
     )
-    assert out.exists()
-    assert out.stat().st_size > 1000  # non-trivial PNG
+    assert isinstance(blob, bytes)
+    assert len(blob) > 1000
+    # JPEG SOI magic
+    assert blob[:2] == b"\xff\xd8"
+    assert blob[-2:] == b"\xff\xd9"
 
 
-def test_planner_writes_debug_pngs(tmp_path: Path) -> None:
+def test_planner_publishes_debug_jpegs() -> None:
     grid = _grid()
     pose = FakePoseClient(Pose(x=2.0, y=2.0, theta=0.0))
     occ = FakeOccupancyClient(grid)
@@ -60,7 +59,15 @@ def test_planner_writes_debug_pngs(tmp_path: Path) -> None:
             pose.set(target)
             return rid
 
+    class _Sink:
+        def __init__(self) -> None:
+            self.payloads: list[bytes] = []
+
+        def put(self, payload: bytes) -> None:
+            self.payloads.append(payload)
+
     nav = _CoupledNav()
+    sink = _Sink()
     params = NBVParams(
         h_fov_deg=80.0,
         fov_range_m=2.0,
@@ -69,7 +76,9 @@ def test_planner_writes_debug_pngs(tmp_path: Path) -> None:
         max_iterations=8,
         lambda_cost=0.05,
     )
-    core = PlannerCore(pose, occ, nav, params=params, rng_seed=3, debug_dir=tmp_path)
+    core = PlannerCore(
+        pose, occ, nav, params=params, rng_seed=3, debug_publisher=sink
+    )
     area = SearchArea(
         polygon=rect_around(2.0, 2.0, 2.0, 2.0),
         anchor_pose=Pose(x=2.0, y=2.0, theta=0.0),
@@ -80,5 +89,6 @@ def test_planner_writes_debug_pngs(tmp_path: Path) -> None:
         if s.state in ("completed", "failed", "blocked", "aborted"):
             break
 
-    pngs = list(tmp_path.rglob("iter_*.png"))
-    assert len(pngs) >= 1
+    assert len(sink.payloads) >= 1
+    for blob in sink.payloads:
+        assert blob[:2] == b"\xff\xd8"

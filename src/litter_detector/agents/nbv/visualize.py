@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import io
 import math
-from pathlib import Path
 
+import cv2
 import matplotlib
 
 matplotlib.use("Agg")  # headless render
@@ -15,9 +16,8 @@ from litter_detector.agents.nbv.geometry import Polygon
 from litter_detector.agents.tools.occupancy import OccupancyGrid
 
 
-def render_debug_png(
+def render_debug_jpeg(
     *,
-    out_path: Path,
     grid: OccupancyGrid,
     seen_mask: np.ndarray,
     target_mask: np.ndarray,
@@ -27,22 +27,22 @@ def render_debug_png(
     chosen: Candidate | None,
     iteration: int,
     coverage: float,
-) -> None:
-    """Render an iteration snapshot to `out_path` (parents created if needed).
+    quality: int = 85,
+) -> bytes:
+    """Render an iteration snapshot and return JPEG-encoded bytes.
 
     Layers (bottom to top): occupancy / seen overlay / target outline /
     polygon outline / candidates / chosen / pose arrow.
     """
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
     # Build an RGB image at the grid's resolution.
     h, w = grid.height, grid.width
     img = np.full((h, w, 3), 200, dtype=np.uint8)  # unknown = light gray
     img[grid.free_mask()] = (245, 245, 245)
     img[grid.occupied_mask()] = (40, 40, 40)
-    # Seen overlay: tint free+seen cells light blue
-    seen_free = seen_mask & grid.free_mask()
-    img[seen_free] = (180, 215, 240)
+    # Seen overlay: tint any non-occupied seen cell light blue (includes
+    # unknown cells the FOV raycast swept through — they count as covered).
+    seen_visible = seen_mask & ~grid.occupied_mask()
+    img[seen_visible] = (180, 215, 240)
     # Target outline (cells in target but not seen): pale yellow
     target_unseen = target_mask & ~seen_mask
     img[target_unseen] = (255, 240, 180)
@@ -113,5 +113,17 @@ def render_debug_png(
     ax.set_aspect("equal")
     ax.legend(loc="lower right", fontsize=8)
     fig.tight_layout()
-    fig.savefig(out_path)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png")
     plt.close(fig)
+    png_arr = np.frombuffer(buf.getvalue(), dtype=np.uint8)
+    bgr = cv2.imdecode(png_arr, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise RuntimeError("failed to decode rendered figure")
+    ok, encoded = cv2.imencode(
+        ".jpg", bgr, (cv2.IMWRITE_JPEG_QUALITY, int(quality))
+    )
+    if not ok:
+        raise RuntimeError("failed to JPEG-encode debug frame")
+    return encoded.tobytes()
