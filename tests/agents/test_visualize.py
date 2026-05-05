@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import numpy as np
 
 from litter_detector.agents.models import Candidate, NBVParams, Pose, SearchArea
@@ -88,6 +90,12 @@ def test_planner_publishes_debug_jpegs() -> None:
         s = core.step()
         if s.state in ("completed", "failed", "blocked", "aborted"):
             break
+
+    # Periodic debug publisher runs at ~2 Hz on its own thread; give it a tick.
+    deadline = time.monotonic() + 2.0
+    while not sink.payloads and time.monotonic() < deadline:
+        time.sleep(0.05)
+    core.stop_periodic_debug()
 
     assert len(sink.payloads) >= 1
     for blob in sink.payloads:

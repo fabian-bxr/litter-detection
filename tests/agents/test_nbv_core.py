@@ -146,9 +146,8 @@ def test_score_picks_orientation_into_unseen() -> None:
     assert len(candidates) == 1
     c = candidates[0]
     assert c.gain > 0.0
-    # Best orientation should point roughly into +y (theta ~ pi/2)
-    # Allow any of the 8 sampled angles closest to pi/2.
-    assert math.cos(c.pose.theta - math.pi / 2) > 0.5
+    # Continuous orientation (centroid-of-unseen) should aim into +y, ~pi/2.
+    assert math.cos(c.pose.theta - math.pi / 2) > 0.8
 
 
 def test_best_candidate_returns_none_when_no_gain() -> None:

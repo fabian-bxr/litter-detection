@@ -140,6 +140,28 @@ def test_step_handles_grid_resize_mid_mission() -> None:
     assert "geometry" not in status.last_message
 
 
+def test_single_nav_failed_triggers_replan_not_terminate() -> None:
+    """A nav status of 'failed' must replan, not terminate the mission."""
+    pose, occ, nav = _setup()
+    # First nav call returns 'failed', subsequent calls succeed.
+    nav.next_state = "failed"
+    params = NBVParams(coverage_target=0.99, max_iterations=5)
+    core = PlannerCore(pose, occ, nav, params=params)
+    area = SearchArea(
+        polygon=rect_around(4.0, 4.0, 2.0, 2.0),
+        anchor_pose=Pose(x=4.0, y=4.0, theta=0.0),
+    )
+    core.start(area)
+    s = core.step()
+    # Mission must NOT be terminal — it should have been kicked back to planning.
+    assert s.state == "planning", s.last_message
+    assert "fail" in s.last_message.lower() and "replan" in s.last_message.lower()
+    # Subsequent step submits a fresh nav goal (proving it's actually replanning).
+    submitted_before = len(nav.submitted)
+    core.step()
+    assert len(nav.submitted) > submitted_before
+
+
 def test_step_handles_nav_failure() -> None:
     pose, occ, nav = _setup()
     nav.default_state = "failed"

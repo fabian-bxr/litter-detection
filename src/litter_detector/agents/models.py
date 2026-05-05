@@ -34,11 +34,17 @@ class NBVParams(BaseModel):
     n_candidates: int = 16
     candidate_step_m: float = 1.5  # max distance from current pose for candidates
     candidate_min_separation_m: float = 0.5
-    lambda_cost: float = 0.4  # score = gain - lambda_cost * cost_m
-    coverage_target: float = 0.95
+    # Multiplicative cost-utility (Holz 2010 / González-Baños 2002 form):
+    #   score = new_cells * exp(-lambda_cost * dist_m) * (1 + gamma_heading * cos(dtheta))
+    lambda_cost: float = 0.4  # per meter; exp-decay distance discount
+    gamma_heading: float = 0.3  # heading-consistency weight, +/- this fraction of score
+    coverage_target: float = 0.85
     max_iterations: int = 50
     obstacle_inflation_m: float = 0.3
-    seen_mask_decay: float = 0.0  # 0 = never forget
+    # Frontier clustering: commit to one cluster until exhausted, only switch
+    # if a competing cluster's utility exceeds (1 + hysteresis) * current.
+    cluster_hysteresis: float = 0.25
+    min_cluster_cells: int = 5
 
 
 class Candidate(BaseModel):

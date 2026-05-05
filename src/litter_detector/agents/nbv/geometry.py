@@ -10,6 +10,19 @@ from litter_detector.agents.tools.occupancy import OccupancyGrid
 Polygon = list[tuple[float, float]]
 
 
+def polygon_area_m2(polygon: Polygon) -> float:
+    """Signed-shoelace polygon area in m² (absolute value)."""
+    n = len(polygon)
+    if n < 3:
+        return 0.0
+    s = 0.0
+    for i in range(n):
+        x1, y1 = polygon[i]
+        x2, y2 = polygon[(i + 1) % n]
+        s += x1 * y2 - x2 * y1
+    return abs(s) / 2.0
+
+
 def rect_around(center_x: float, center_y: float, width: float, height: float) -> Polygon:
     """Axis-aligned rectangle centered at (center_x, center_y).
 

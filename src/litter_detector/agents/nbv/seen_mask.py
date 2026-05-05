@@ -7,6 +7,38 @@ from litter_detector.agents.nbv.fov import raycast_wedge
 from litter_detector.agents.tools.occupancy import OccupancyGrid
 
 
+def rebind_bool_mask(
+    mask: np.ndarray,
+    old_resolution: float,
+    old_origin_x: float,
+    old_origin_y: float,
+    new_grid: OccupancyGrid,
+) -> np.ndarray:
+    """Re-anchor a bool grid mask to a new grid geometry, preserving content.
+
+    Each True cell's world-center is mapped onto the new grid; cells out of
+    bounds are dropped. Pure function — used both by SeenMask.rebind and by
+    the planner's sticky-occupancy memory.
+    """
+    new_h, new_w = new_grid.height, new_grid.width
+    out = np.zeros((new_h, new_w), dtype=bool)
+    if not mask.any():
+        return out
+    rows, cols = np.where(mask)
+    xs = old_origin_x + (cols + 0.5) * old_resolution
+    ys = old_origin_y + (rows + 0.5) * old_resolution
+    new_cols = ((xs - new_grid.origin_x) / new_grid.resolution).astype(int)
+    new_rows = ((ys - new_grid.origin_y) / new_grid.resolution).astype(int)
+    valid = (
+        (new_rows >= 0)
+        & (new_rows < new_h)
+        & (new_cols >= 0)
+        & (new_cols < new_w)
+    )
+    out[new_rows[valid], new_cols[valid]] = True
+    return out
+
+
 class SeenMask:
     """Tracks which cells the camera FOV has covered so far.
 
@@ -46,30 +78,13 @@ class SeenMask:
         self._mask |= wedge
 
     def rebind(self, new_grid: OccupancyGrid) -> None:
-        """Re-anchor the seen mask to a new grid geometry, preserving content.
-
-        Each previously-seen cell's world center is mapped onto the new grid;
-        cells that fall out of bounds are dropped. Same-geometry calls are no-ops.
-        """
+        """Re-anchor the seen mask to a new grid geometry, preserving content."""
         if self.matches(new_grid):
             return
-        new_h, new_w = new_grid.height, new_grid.width
-        new_mask = np.zeros((new_h, new_w), dtype=bool)
-        if self._mask.any():
-            rows, cols = np.where(self._mask)
-            xs = self.origin_x + (cols + 0.5) * self.resolution
-            ys = self.origin_y + (rows + 0.5) * self.resolution
-            new_cols = ((xs - new_grid.origin_x) / new_grid.resolution).astype(int)
-            new_rows = ((ys - new_grid.origin_y) / new_grid.resolution).astype(int)
-            valid = (
-                (new_rows >= 0)
-                & (new_rows < new_h)
-                & (new_cols >= 0)
-                & (new_cols < new_w)
-            )
-            new_mask[new_rows[valid], new_cols[valid]] = True
-        self._mask = new_mask
-        self.shape = (new_h, new_w)
+        self._mask = rebind_bool_mask(
+            self._mask, self.resolution, self.origin_x, self.origin_y, new_grid
+        )
+        self.shape = (new_grid.height, new_grid.width)
         self.resolution = new_grid.resolution
         self.origin_x = new_grid.origin_x
         self.origin_y = new_grid.origin_y

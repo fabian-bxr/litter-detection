@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -85,20 +86,32 @@ class NavClient:
             logger.warning(f"NavClient: failed to parse nav/status message: {e}")
             return
         rid = data.get("request_id")
+        state = data.get("state")
         if not rid:
+            if state in _TERMINAL:
+                logger.warning(
+                    f"NavClient: terminal nav status with no request_id (state={state}); "
+                    "cannot route to a waiter"
+                )
             return
         with self._lock:
             self._latest_by_id[rid] = data
             ev = self._events.get(rid)
-        if data.get("state") in _TERMINAL and ev is not None:
-            ev.set()
+        if state in _TERMINAL:
+            if ev is not None:
+                ev.set()
+            else:
+                logger.debug(
+                    f"NavClient: terminal status state={state} for rid={rid} "
+                    "but no waiter registered (request may have already returned)"
+                )
 
     def submit(
         self,
         target: Pose,
         *,
         max_speed: float | None = None,
-        allowed_deviation: float = 0.15,
+        allowed_deviation: float = 0.25,
         allowed_orientation_deviation: float = 0.2,
     ) -> str:
         request_id = str(uuid.uuid4())
@@ -116,28 +129,45 @@ class NavClient:
         return request_id
 
     def wait_for_terminal(self, request_id: str, timeout: float) -> NavResult | None:
+        """Wait until a terminal NavStatus arrives for `request_id` or `timeout` elapses.
+
+        Polls the latest-status cache in addition to waiting on the event:
+        if a terminal message arrived but the event wasn't set (e.g., the
+        message lacked a request_id, or `_on_status` already fired but the
+        waiter wasn't yet registered), we still return as soon as the cache
+        shows a terminal state. Without this, a missed event signal would
+        force the caller to block for the full timeout.
+        """
         with self._lock:
             ev = self._events.get(request_id)
         if ev is None:
             return None
-        if not ev.wait(timeout):
-            return None
-        with self._lock:
-            data = self._latest_by_id.get(request_id)
-        if data is None:
-            return None
-        cp = data.get("current_pose") or {}
-        final = (
-            Pose(x=float(cp["x"]), y=float(cp["y"]), theta=float(cp.get("theta", 0.0)))
-            if cp
-            else None
-        )
-        return NavResult(
-            request_id=request_id,
-            state=str(data.get("state", "failed")),
-            final_pose=final,
-            distance_to_target=data.get("distance_to_target"),
-        )
+        deadline = time.monotonic() + timeout
+        poll_period = 0.1
+        while True:
+            with self._lock:
+                data = self._latest_by_id.get(request_id)
+            if data is not None and data.get("state") in _TERMINAL:
+                cp = data.get("current_pose") or {}
+                final = (
+                    Pose(
+                        x=float(cp["x"]),
+                        y=float(cp["y"]),
+                        theta=float(cp.get("theta", 0.0)),
+                    )
+                    if cp
+                    else None
+                )
+                return NavResult(
+                    request_id=request_id,
+                    state=str(data.get("state", "failed")),
+                    final_pose=final,
+                    distance_to_target=data.get("distance_to_target"),
+                )
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            ev.wait(min(poll_period, remaining))
 
     def latest_status(self, request_id: str) -> dict | None:
         with self._lock:

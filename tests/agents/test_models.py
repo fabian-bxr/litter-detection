@@ -34,7 +34,7 @@ def test_candidate_score_field() -> None:
 
 def test_nbv_defaults() -> None:
     p = NBVParams()
-    assert p.coverage_target == 0.95
+    assert p.coverage_target == 0.85
     assert p.h_fov_deg == 70.0
 
 

@@ -14,10 +14,15 @@ from litter_detector.agents.models import (
     Pose,
     SearchArea,
 )
+from litter_detector.agents.models import Candidate
 from litter_detector.agents.nbv.candidates import sample_candidate_positions
-from litter_detector.agents.nbv.geometry import polygon_mask
+from litter_detector.agents.nbv.clusters import (
+    find_frontier_clusters,
+    pick_active_cluster,
+)
+from litter_detector.agents.nbv.geometry import polygon_area_m2, polygon_mask
 from litter_detector.agents.nbv.scoring import best_candidate, score_candidates
-from litter_detector.agents.nbv.seen_mask import SeenMask
+from litter_detector.agents.nbv.seen_mask import SeenMask, rebind_bool_mask
 from litter_detector.agents.tools.nav import NavResult
 from litter_detector.agents.tools.occupancy import OccupancyGrid
 
@@ -79,9 +84,30 @@ class PlannerCore:
         self._area: SearchArea | None = None
         self._seen: SeenMask | None = None
         self._target_mask: np.ndarray | None = None
+        # Grid-clipped polygon mask, recomputed each ingest so it tracks
+        # grid growth. Used as the second factor for occupied-in-polygon.
+        self._polygon_mask: np.ndarray | None = None
+        # Sticky-occupancy memory: once a cell has been observed as occupied
+        # we keep it excluded from the target. Costmap glitches that briefly
+        # turn an obstacle back to unknown/free won't re-introduce it as
+        # unseen target area mid-mission.
+        self._occupied_ever: np.ndarray | None = None
+        # Total cells the polygon would occupy at grid resolution. Used as
+        # the coverage denominator so cells of the polygon that lie *outside*
+        # the current grid extent still count as unseen — otherwise the
+        # mission completes against a slice of the polygon, not the polygon.
+        self._polygon_total_cells: int = 0
         self._status = MissionStatus(mission_id="", state="idle")
         self._consecutive_nav_failures = 0
-        self._max_consecutive_nav_failures = 3
+        self._max_consecutive_nav_failures = 5
+        self._coverage_at_last_failure = 0.0
+        # Active-cluster state (frontier clustering + commit/hysteresis)
+        self._active_cluster_centroid: tuple[float, float] | None = None
+        # Last-iteration debug snapshot data, read by the periodic publisher
+        self._last_candidates: list[Candidate] = []
+        self._last_chosen: Candidate | None = None
+        self._debug_thread: threading.Thread | None = None
+        self._debug_stop = threading.Event()
 
     # ----- public API ---------------------------------------------------
 
@@ -91,11 +117,18 @@ class PlannerCore:
 
     def abort(self) -> None:
         self._abort.set()
+        self.stop_periodic_debug()
         with self._lock:
             if self._status.state in ("planning", "navigating"):
                 self._status = self._status.model_copy(
                     update={"state": "aborted", "last_message": "aborted by request"}
                 )
+
+    def stop_periodic_debug(self) -> None:
+        self._debug_stop.set()
+        if self._debug_thread is not None:
+            self._debug_thread.join(timeout=1.0)
+            self._debug_thread = None
 
     def start(self, area: SearchArea) -> MissionStatus:
         """Initialize mission state and bake the coverage target mask."""
@@ -105,7 +138,14 @@ class PlannerCore:
             return self._set_failed("no occupancy grid available")
         self._area = area
         self._seen = SeenMask(grid)
-        self._target_mask = polygon_mask(grid, area.polygon) & ~grid.occupied_mask()
+        self._occupied_ever = grid.occupied_mask().copy()
+        self._polygon_mask = polygon_mask(grid, area.polygon)
+        self._target_mask = self._polygon_mask & ~self._occupied_ever
+        # World-frame polygon area, in cells, fixed for the mission. Survives
+        # grid growth so coverage stays consistent as the costmap expands.
+        self._polygon_total_cells = max(
+            1, int(round(polygon_area_m2(area.polygon) / (grid.resolution ** 2)))
+        )
         target_count = int(self._target_mask.sum())
         if target_count == 0:
             return self._set_failed("search polygon contains no free cells")
@@ -117,6 +157,20 @@ class PlannerCore:
                 iteration=0,
                 last_message=f"target {target_count} cells",
             )
+        self._consecutive_nav_failures = 0
+        self._coverage_at_last_failure = 0.0
+        self._active_cluster_centroid = None
+        self._last_candidates = []
+        self._last_chosen = None
+        # Kick off periodic debug publisher (~2 Hz) for the lifetime of the mission.
+        if self._debug_publisher is not None:
+            self._debug_stop = threading.Event()
+            self._debug_thread = threading.Thread(
+                target=self._periodic_debug_loop,
+                daemon=True,
+                name="planner-debug-publish",
+            )
+            self._debug_thread.start()
         logger.info(f"Planner started mission with {target_count} target cells")
         return self.status()
 
@@ -142,7 +196,7 @@ class PlannerCore:
         self._ingest(pose, grid)
 
         with self._seen_lock:
-            coverage = self._seen.coverage_inside(self._target_mask)
+            coverage = self._coverage_locked()
         if coverage >= self._params.coverage_target:
             return self._set_state(
                 state="completed",
@@ -161,22 +215,29 @@ class PlannerCore:
         with self._seen_lock:
             unseen = self._target_mask & ~self._seen.mask
         safe = grid.inflate_obstacles(self._params.obstacle_inflation_m)
+
+        # Frontier clustering with commit + hysteresis: identify connected
+        # unseen regions, pick one to commit to, and bias candidate sampling
+        # toward its cells. This is what stops the wander/back-jump pattern.
+        clusters = find_frontier_clusters(
+            unseen, grid, min_size=self._params.min_cluster_cells
+        )
+        active, active_centroid = pick_active_cluster(
+            clusters, pose, self._active_cluster_centroid, self._params
+        )
+        self._active_cluster_centroid = active_centroid
+        sampling_mask = active.cells if active is not None else unseen
+
         positions = sample_candidate_positions(
             pose, grid, self._area.polygon, self._params, self._rng, safe,
-            unseen_mask=unseen,
+            unseen_mask=sampling_mask,
         )
         candidates = score_candidates(pose, positions, grid, self._params, unseen)
         choice = best_candidate(candidates)
+        with self._lock:
+            self._last_candidates = list(candidates)
+            self._last_chosen = choice
         if choice is None:
-            self._maybe_render_debug(
-                grid=grid,
-                polygon=self._area.polygon,
-                pose=pose,
-                candidates=candidates,
-                chosen=None,
-                iteration=iteration,
-                coverage=coverage,
-            )
             return self._set_state(
                 state="blocked",
                 coverage=coverage,
@@ -211,13 +272,23 @@ class PlannerCore:
         if nav_result is None or (
             nav_result.state != "arrived_final" and nav_result.state != "blocked"
         ):
-            # Soft retry: keep the seen mask we accumulated during motion (the
-            # streamer was running) and replan from the current pose. The mission
-            # only fails after `_max_consecutive_nav_failures` strikes in a row.
-            self._consecutive_nav_failures += 1
+            # Soft retry: the streamer kept the seen mask up-to-date during
+            # motion, so progress made before the failure is preserved. We
+            # replan from the current pose. Reset the strike counter whenever
+            # coverage has grown since the last failure — glitchy nav on a
+            # mission that's still progressing shouldn't ever terminate.
             with self._seen_lock:
-                coverage = self._seen.coverage_inside(self._target_mask)
-            reason = "nav timed out" if nav_result is None else f"nav state={nav_result.state}"
+                coverage = self._coverage_locked()
+            if coverage > self._coverage_at_last_failure + 1e-6:
+                self._consecutive_nav_failures = 0
+            self._consecutive_nav_failures += 1
+            self._coverage_at_last_failure = coverage
+            # Drop active cluster — current target may be unreachable; let
+            # next iteration re-pick based on what's actually accessible.
+            self._active_cluster_centroid = None
+            reason = (
+                "nav timed out" if nav_result is None else f"nav state={nav_result.state}"
+            )
             if (
                 self._consecutive_nav_failures
                 >= self._max_consecutive_nav_failures
@@ -226,7 +297,7 @@ class PlannerCore:
                     state="failed",
                     coverage=coverage,
                     iteration=iteration,
-                    message=f"{reason} ({self._consecutive_nav_failures}x); giving up",
+                    message=f"{reason} ({self._consecutive_nav_failures}x without progress); giving up",
                 )
             logger.warning(
                 f"{reason} (strike {self._consecutive_nav_failures}/"
@@ -255,17 +326,8 @@ class PlannerCore:
         if nav_result.final_pose is not None:
             self._ingest(nav_result.final_pose, final_grid)
         with self._seen_lock:
-            coverage = self._seen.coverage_inside(self._target_mask)
+            coverage = self._coverage_locked()
         grid = final_grid
-        self._maybe_render_debug(
-            grid=grid,
-            polygon=self._area.polygon,
-            pose=final_pose,
-            candidates=candidates,
-            chosen=choice,
-            iteration=iteration,
-            coverage=coverage,
-        )
         if self._abort.is_set():
             return self._set_state(
                 state="aborted",
@@ -285,6 +347,28 @@ class PlannerCore:
 
     # ----- helpers ------------------------------------------------------
 
+    def _coverage_locked(self) -> float:
+        """Coverage as fraction of the polygon's *world* area, not the grid slice.
+
+        Numerator: cells that are seen AND in the grid-clipped target.
+        Denominator: `_polygon_total_cells` (fixed-from-world-area) minus
+        cells we've ever observed as occupied inside the polygon — so
+        revealed obstacles correctly shrink the goal, but unexplored polygon
+        cells *outside the current grid extent* still count as unseen.
+        Caller must hold `_seen_lock`.
+        """
+        if (
+            self._seen is None
+            or self._target_mask is None
+            or self._occupied_ever is None
+            or self._polygon_mask is None
+        ):
+            return 0.0
+        seen_inside = int((self._seen.mask & self._target_mask).sum())
+        occupied_in_poly = int((self._occupied_ever & self._polygon_mask).sum())
+        denom = max(1, self._polygon_total_cells - occupied_in_poly)
+        return min(1.0, seen_inside / denom)
+
     def _ingest(self, pose: Pose, grid: OccupancyGrid) -> None:
         """Atomically: rebind on geometry change, recompute target, OR FOV wedge.
 
@@ -301,10 +385,22 @@ class PlannerCore:
                     f"grid geometry changed "
                     f"({self._seen.shape} → ({grid.height},{grid.width})); rebinding"
                 )
+                old_res = self._seen.resolution
+                old_ox = self._seen.origin_x
+                old_oy = self._seen.origin_y
                 self._seen.rebind(grid)
-            self._target_mask = (
-                polygon_mask(grid, self._area.polygon) & ~grid.occupied_mask()
-            )
+                if self._occupied_ever is not None:
+                    self._occupied_ever = rebind_bool_mask(
+                        self._occupied_ever, old_res, old_ox, old_oy, grid
+                    )
+            if self._occupied_ever is None:
+                self._occupied_ever = np.zeros(
+                    (grid.height, grid.width), dtype=bool
+                )
+            # Sticky: OR in any newly-observed occupied cells; never clear.
+            self._occupied_ever |= grid.occupied_mask()
+            self._polygon_mask = polygon_mask(grid, self._area.polygon)
+            self._target_mask = self._polygon_mask & ~self._occupied_ever
             self._seen.update(pose, grid, self._params)
 
     def _stream_seen_updates(self, stop: threading.Event) -> None:
@@ -346,43 +442,61 @@ class PlannerCore:
             )
             return self._status.model_copy()
 
-    def _maybe_render_debug(
-        self,
-        *,
-        grid,
-        polygon,
-        pose: Pose,
-        candidates: list,
-        chosen,
-        iteration: int,
-        coverage: float,
-    ) -> None:
-        if (
-            self._debug_publisher is None
-            or self._seen is None
-            or self._target_mask is None
-        ):
-            return
-        try:
-            from litter_detector.agents.nbv.visualize import render_debug_jpeg
+    def _periodic_debug_loop(self) -> None:
+        """Render and publish a debug JPEG at ~2 Hz throughout the mission.
 
-            with self._seen_lock:
-                seen_snapshot = self._seen.mask.copy()
-                target_snapshot = self._target_mask.copy()
-            jpeg = render_debug_jpeg(
-                grid=grid,
-                seen_mask=seen_snapshot,
-                target_mask=target_snapshot,
-                polygon=polygon,
-                pose=pose,
-                candidates=candidates,
-                chosen=chosen,
-                iteration=iteration,
-                coverage=coverage,
-            )
-            self._debug_publisher.put(jpeg)
-        except Exception as e:
-            logger.warning(f"debug render/publish failed: {e}")
+        Decoupled from the step() cycle: the user gets a live view of the
+        seen mask growing as the robot drives, instead of one frame per nav
+        iteration. Reads the latest pose+grid each tick and snapshots the
+        seen/target masks under `_seen_lock`.
+        """
+        if self._debug_publisher is None:
+            return
+        from litter_detector.agents.nbv.visualize import render_debug_jpeg
+
+        period_s = 0.5
+        while not self._debug_stop.is_set():
+            try:
+                if (
+                    self._seen is None
+                    or self._target_mask is None
+                    or self._area is None
+                ):
+                    self._debug_stop.wait(period_s)
+                    continue
+                pose = self._pose.get(timeout=0.2)
+                grid = self._occ.get(timeout=0.2)
+                if pose is None or grid is None:
+                    self._debug_stop.wait(period_s)
+                    continue
+                with self._seen_lock:
+                    if not self._seen.matches(grid):
+                        # Geometry changed mid-tick; let the streamer/step
+                        # rebind on the next iteration.
+                        self._debug_stop.wait(period_s)
+                        continue
+                    seen_snapshot = self._seen.mask.copy()
+                    target_snapshot = self._target_mask.copy()
+                with self._lock:
+                    candidates = list(self._last_candidates)
+                    chosen = self._last_chosen
+                    iteration = self._status.iteration
+                    coverage = self._status.coverage
+                jpeg = render_debug_jpeg(
+                    grid=grid,
+                    seen_mask=seen_snapshot,
+                    target_mask=target_snapshot,
+                    polygon=self._area.polygon,
+                    pose=pose,
+                    candidates=candidates,
+                    chosen=chosen,
+                    iteration=iteration,
+                    coverage=coverage,
+                )
+                self._debug_publisher.put(jpeg)
+            except Exception as e:
+                logger.debug(f"periodic debug skipped: {e}")
+            self._debug_stop.wait(period_s)
 
     def _set_failed(self, message: str) -> MissionStatus:
         with self._lock:
@@ -417,19 +531,24 @@ class PlannerRunner:
         return status
 
     def _loop(self) -> None:
-        while True:
-            if self._core._abort.is_set():
-                self._core._set_state(
-                    state="aborted",
-                    coverage=self._core.status().coverage,
-                    iteration=self._core.status().iteration,
-                    message="aborted by request",
-                )
-                return
-            status = self._core.step()
-            if status.state in _TERMINAL_STATES:
-                logger.info(f"Planner terminal: {status.state} — {status.last_message}")
-                return
+        try:
+            while True:
+                if self._core._abort.is_set():
+                    self._core._set_state(
+                        state="aborted",
+                        coverage=self._core.status().coverage,
+                        iteration=self._core.status().iteration,
+                        message="aborted by request",
+                    )
+                    return
+                status = self._core.step()
+                if status.state in _TERMINAL_STATES:
+                    logger.info(
+                        f"Planner terminal: {status.state} — {status.last_message}"
+                    )
+                    return
+        finally:
+            self._core.stop_periodic_debug()
 
     def abort(self) -> None:
         self._core.abort()
