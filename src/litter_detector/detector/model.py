@@ -73,11 +73,42 @@ def preprocess(frame_bgr: np.ndarray, device: torch.device) -> torch.Tensor:
     return tensor.to(device, non_blocking=True)
 
 
-def postprocess(logits: torch.Tensor, out_hw: tuple[int, int]) -> np.ndarray:
-    probs = torch.sigmoid(logits).squeeze().detach().cpu().numpy()
-    mask_small = (probs > 0.5).astype(np.uint8) * 255
+def probs_from_logits(logits: torch.Tensor, out_hw: tuple[int, int]) -> np.ndarray:
+    """Sigmoid → resize → full-resolution probability map (float32, H×W)."""
+    probs_small = torch.sigmoid(logits).squeeze().detach().cpu().numpy()
     h, w = out_hw
-    return cv2.resize(mask_small, (w, h), interpolation=cv2.INTER_NEAREST)
+    return cv2.resize(probs_small, (w, h), interpolation=cv2.INTER_LINEAR)
+
+
+def binarize(probs: np.ndarray, prob_threshold: float = 0.5) -> np.ndarray:
+    """Threshold a probability map to a uint8 binary mask (0 or 255)."""
+    return (probs > prob_threshold).astype(np.uint8) * 255
+
+
+def morph_close(mask: np.ndarray, kernel_size: int) -> np.ndarray:
+    """Morphological closing — fills small holes / bridges nearby blobs.
+
+    Set kernel_size <= 1 to skip (returns input unchanged).
+    """
+    if kernel_size <= 1:
+        return mask
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+    return cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+
+
+def postprocess(
+    logits: torch.Tensor,
+    out_hw: tuple[int, int],
+    prob_threshold: float = 0.5,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convenience wrapper: probs → binarize. Returns (mask_uint8, probs_float).
+
+    The detector loop does its own temporal smoothing + morphology between the
+    two steps, so it bypasses this helper and calls `probs_from_logits` /
+    `binarize` / `morph_close` directly.
+    """
+    probs = probs_from_logits(logits, out_hw)
+    return binarize(probs, prob_threshold), probs
 
 
 def overlay(frame_bgr: np.ndarray, mask: np.ndarray) -> np.ndarray:
