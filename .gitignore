@@ -7,3 +7,5 @@ mlartifacts/
 .DS_Stores
 # generic training checkpoint (named checkpoints are tracked)
 best_model.pth
+# JetBrains IDE config
+.idea/
