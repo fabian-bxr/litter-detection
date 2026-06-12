@@ -1,0 +1,15 @@
+# Map metadata for my_lab_grid.png in ROS map_server format, as produced by
+# MOLA's mm2grid (https://docs.mola-slam.org/latest/app_mm2grid.html).
+#
+# !!! PLACEHOLDER VALUES !!!
+# `resolution` and `origin` are assumptions — replace this file with the real
+# YAML emitted by mm2grid alongside the PNG. `origin` is [x, y, yaw] of the
+# *bottom-left* pixel in the robot's world/map frame; yaw != 0 is not
+# supported yet by FileMapProvider.
+image: my_lab_grid.png
+resolution: 0.1
+origin: [-20.25, -11.25, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
+mode: trinary

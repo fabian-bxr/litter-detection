@@ -208,7 +208,10 @@ class LitterDetector:
                 if not (ok_mask and ok_overlay):
                     logger.error("Failed to JPEG-encode mask or overlay")
                     return
-                self.frame_pub.put(payload)
+                # timestamp_ns attachment lets downstream consumers pair this
+                # frame exactly with the tracked-objects message of the same
+                # loop iteration (existing consumers ignore attachments).
+                self.frame_pub.put(payload, attachment=str(frame_ts_ns).encode())
                 self.mask_pub.put(mask_jpeg.tobytes())
                 self.masked_pub.put(overlay_jpeg.tobytes())
                 self.detections_pub.put(
