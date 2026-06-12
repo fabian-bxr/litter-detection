@@ -9,3 +9,5 @@ mlartifacts/
 best_model.pth
 # JetBrains IDE config
 .idea/
+# personal Claude Code settings (shared plans/memory in .claude/ are tracked)
+.claude/settings.local.json
