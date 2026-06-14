@@ -7,7 +7,7 @@ metadata:
   originSessionId: 06a21a74-8d84-4079-8467-34623b94d0ce
 ---
 
-Repo: `/home/fabian/PycharmProjects/robodog-digipro` (reference-only — copy pydantic models into this repo, never import or modify). Schemas live in `src/interfaces/` (`navigation.py`, `robot.py`, `occupancy.py`, `topics/topics.py`).
+Repo: `C:\Users\Dominik\PycharmProjects\robodog-digipro` (reference-only — copy pydantic models into this repo, never import or modify). Schemas live in `src/interfaces/` (`navigation.py`, `robot.py`, `occupancy.py`, `topics/topics.py`). Source verified 2026-06-13.
 
 - `robodog/localization/pose` — `OdometryState {x,y,z, quaternion[qx,qy,qz,qw], timestamp}` (meters, world frame; `quaternion_to_yaw` helper in navigation.py). Currently odometry passthrough.
 - `nav/request` — `NavigationRequest {request_id, segments:[{target:{x,y,theta}, max_speed, allowed_deviation=0.15, must_stop, orientation_at_target, ...}], lookahead_segments}`. Straight-line pure-pursuit execution, **no obstacle avoidance**; a new request preempts the running one.

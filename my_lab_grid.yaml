@@ -1,0 +1,9 @@
+# Map: my_lab_grid.png, 405x225 px
+# At 0.05 m/px: 20.25 m wide, 11.25 m tall
+# Origin adjusted so free-space centre aligns with simulation world-frame (robot starts at 0,0)
+image: my_lab_grid.png
+resolution: 0.05
+origin: [-3.0, -9.25, 0.0]   # [x, y, yaw] of bottom-left corner
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

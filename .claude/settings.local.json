@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(uv sync *)",
-      "Bash(uv run *)"
+      "Bash(uv run *)",
+      "PowerShell(python -c \"from PIL import Image; img = Image.open\\('C:/Users/Dominik/litter-detection/my_lab_grid.png'\\); print\\(img.size, img.mode\\)\")"
     ]
   }
 }
