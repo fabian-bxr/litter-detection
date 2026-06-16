@@ -12,6 +12,7 @@ class DetectionTopics(msgspec.Struct, frozen=True):
     mask: str  # Binary mask of detected litter
     masked_frame: str  # Camera frame with litter mask applied
     detections: str  # Detections JSON
+    tracked: str  # Tracked objects with stable IDs JSON
 
 
 class CameraTopics(msgspec.Struct, frozen=True):
@@ -30,6 +31,7 @@ TOPICS = Topics(
         mask="litter/mask",
         masked_frame="litter/masked_frame",
         detections="litter/detection",
+        tracked="litter/tracked",
     ),
     camera=CameraTopics(go2_camera="robodog/sensors/go2_camera", frame="camera/frame"),
 )
@@ -50,6 +52,8 @@ class Settings(BaseSettings):
     otel_endpoint: str = "http://localhost:4317"
     source: str = "webcam"
     id: int | None = None
+    # SQLite file for the tracked-object registry. Empty string disables it.
+    registry_db_path: str = "object_registry.db"
 
     @staticmethod
     def topics() -> Topics:

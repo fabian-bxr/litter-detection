@@ -14,6 +14,7 @@ from loguru import logger
 from litter_detector.config import Settings
 from litter_detector.detector import model as model_mod
 from litter_detector.detector.metrics import SERVICE_NAME, detector_metrics, tracer
+from litter_detector.detector.registry import ObjectRegistry
 from litter_detector.telemetry import setup_telemetry, shutdown_telemetry
 
 
@@ -46,6 +47,7 @@ class LatestFrameSlot:
 class LitterDetector:
     @tracer.start_as_current_span("detector.init")
     def __init__(self) -> None:
+        self.settings = Settings()
         self.session = zenoh.open(Settings.zenoh_config())
         self.topics = Settings.topics()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -65,6 +67,19 @@ class LitterDetector:
         self.detections_pub = self.session.declare_publisher(
             self.topics.detection.detections, encoding=zenoh.Encoding.APPLICATION_JSON
         )
+        self.tracked_pub = self.session.declare_publisher(
+            self.topics.detection.tracked, encoding=zenoh.Encoding.APPLICATION_JSON
+        )
+        # id -> {first_seen_ns, last_seen_ns, n} bookkeeping for tracked output.
+        self._track_reg: dict[int, dict] = {}
+        # Optional SQLite persistence of tracks (empty path disables it).
+        self.registry = (
+            ObjectRegistry(self.settings.registry_db_path)
+            if self.settings.registry_db_path
+            else None
+        )
+        if self.registry is not None:
+            logger.info(f"Track registry: {self.settings.registry_db_path}")
 
         self.slot = LatestFrameSlot()
         self._drop_count = 0
@@ -124,17 +139,66 @@ class LitterDetector:
                 self.frame_pub.put(payload)
                 self.mask_pub.put(mask_jpeg.tobytes())
                 self.masked_pub.put(overlay_jpeg.tobytes())
+                now_ns = time.time_ns()
                 self.detections_pub.put(
                     json.dumps({
-                        "timestamp_ns": time.time_ns(),
+                        "timestamp_ns": now_ns,
                         "mask_coverage_ratio": coverage,
                         "inference_ms": inf_ms,
                     })
                 )
+                raw_tracks = (
+                    self.model.last_tracks()
+                    if hasattr(self.model, "last_tracks")
+                    else []
+                )
+                tracks = self._build_tracked(raw_tracks, (h, w), now_ns)
+                span.set_attribute("tracks.count", len(tracks))
+                self.tracked_pub.put(
+                    json.dumps({"timestamp_ns": now_ns, "tracks": tracks})
+                )
+                if self.registry is not None:
+                    self.registry.upsert_all(tracks)
 
             total_ms = (time.perf_counter() - t_start) * 1000
             detector_metrics.end_to_end_time_ms.record(total_ms)
             detector_metrics.frames_processed.add(1)
+
+    def _build_tracked(
+        self, raw_tracks: list[dict], frame_hw: tuple[int, int], now_ns: int
+    ) -> list[dict]:
+        """Scale normalized YOLO tracks to pixel space and attach per-id
+        first_seen/last_seen/n_observations bookkeeping, matching the
+        litter-agent-V1 TrackMsg schema."""
+        fh, fw = frame_hw
+        frame_area = float(fw * fh)
+        out: list[dict] = []
+        for t in raw_tracks:
+            tid = int(t["id"])
+            reg = self._track_reg.get(tid)
+            if reg is None:
+                reg = {"first_seen_ns": now_ns, "n": 0}
+                self._track_reg[tid] = reg
+            reg["n"] += 1
+            reg["last_seen_ns"] = now_ns
+            x, y, bw, bh = t["bbox_norm"]
+            out.append({
+                "id": tid,
+                "bbox": [
+                    int(round(x * fw)), int(round(y * fh)),
+                    int(round(bw * fw)), int(round(bh * fh)),
+                ],
+                "area_px": int(round(t["area_frac"] * frame_area)),
+                "first_seen_ns": reg["first_seen_ns"],
+                "last_seen_ns": now_ns,
+                "n_observations": reg["n"],
+            })
+        # Drop registry entries not seen for >5 s to bound memory.
+        cutoff = now_ns - 5_000_000_000
+        self._track_reg = {
+            i: r for i, r in self._track_reg.items() if r["last_seen_ns"] >= cutoff
+        }
+        return out
 
     def run(self) -> None:
         logger.info("Detector running — waiting for frames")
@@ -158,6 +222,9 @@ class LitterDetector:
         self.mask_pub.undeclare()
         self.masked_pub.undeclare()
         self.detections_pub.undeclare()
+        self.tracked_pub.undeclare()
+        if self.registry is not None:
+            self.registry.close()
         self.session.close()
 
 
