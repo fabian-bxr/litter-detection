@@ -39,7 +39,8 @@ TOPICS = Topics(
 
 def _build_zenoh_config() -> zenoh.Config:
     """Build a zenoh.Config programmatically from settings."""
-    endpoint = os.environ.get("ZENOH_ROUTER_ENDPOINT", "tcp/127.0.0.1:7447")
+#    endpoint = os.environ.get("ZENOH_ROUTER_ENDPOINT", "tcp/127.0.0.1:7447")
+    endpoint = os.environ.get("ZENOH_ROUTER_ENDPOINT", "tcp/192.168.4.207:7447")
     cfg = zenoh.Config()
     cfg.insert_json5("mode", '"client"')
     cfg.insert_json5("connect/endpoints", f'["{endpoint}"]')

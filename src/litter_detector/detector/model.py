@@ -15,11 +15,16 @@ _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MODEL_URI = str(REPO_ROOT / "models" / "best_yolo11s_seg.pt")
+DEFAULT_MODEL_URI = str(REPO_ROOT / "models" / "best_yolov8s_seg.pt")
 _MLFLOW_SCHEMES = ("models:/", "runs:/", "mlflow://")
 _YOLO_CONF = float(os.environ.get("YOLO_CONF", "0.05"))
 YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "1280"))
 _YOLO_DILATE = int(os.environ.get("YOLO_MASK_DILATE", "5"))
+# Mask binarization threshold: higher = only confident pixels → tighter masks.
+_YOLO_MASK_THRESH = float(os.environ.get("YOLO_MASK_THRESH", "0.5"))
+# Erode the mask by this kernel size (px) to shrink it; 0 = off. Applied before
+# dilation, so set DILATE=0 when using erosion.
+_YOLO_ERODE = int(os.environ.get("YOLO_MASK_ERODE", "0"))
 
 
 class _YoloSegModel(nn.Module):
@@ -60,7 +65,7 @@ class _YoloSegModel(nn.Module):
         mask = np.zeros((h, w), dtype=np.float32)
         if res.masks is not None and len(res.masks.data) > 0:
             md = res.masks.data.detach().cpu().numpy()  # [N, mh, mw], 0..1
-            combined = (md.max(axis=0) > 0.5).astype(np.float32)
+            combined = (md.max(axis=0) > _YOLO_MASK_THRESH).astype(np.float32)
             if combined.shape != (h, w):
                 combined = cv2.resize(
                     combined, (w, h), interpolation=cv2.INTER_NEAREST
@@ -68,6 +73,12 @@ class _YoloSegModel(nn.Module):
             mask = combined
 
         self._last_tracks = self._extract_tracks(res)
+
+        if _YOLO_ERODE > 0 and mask.any():
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (_YOLO_ERODE, _YOLO_ERODE)
+            )
+            mask = cv2.erode(mask.astype(np.uint8), kernel).astype(np.float32)
 
         if _YOLO_DILATE > 0 and mask.any():
             kernel = cv2.getStructuringElement(
@@ -88,7 +99,7 @@ class _YoloSegModel(nn.Module):
         confs = boxes.conf.cpu().numpy()
         if res.masks is not None and len(res.masks.data) == len(ids):
             md = res.masks.data.detach().cpu().numpy()
-            areas = [float((m > 0.5).mean()) for m in md]
+            areas = [float((m > _YOLO_MASK_THRESH).mean()) for m in md]
         else:
             areas = [float(bw * bh) for (_, _, bw, bh) in xywhn]
         tracks = []
