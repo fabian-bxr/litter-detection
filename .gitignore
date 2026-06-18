@@ -13,3 +13,6 @@ best_model.pth
 .idea/
 # personal Claude Code settings (shared plans/memory in .claude/ are tracked)
 .claude/settings.local.json
+
+# Local secrets / env overrides
+.env

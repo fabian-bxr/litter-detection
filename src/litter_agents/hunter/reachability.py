@@ -78,5 +78,13 @@ class Blacklist:
             (x - px) ** 2 + (y - py) ** 2 <= self._radius2 for px, py in self._points
         )
 
+    @property
+    def radius_m(self) -> float:
+        return math.sqrt(self._radius2)
+
+    @property
+    def points(self) -> list[tuple[float, float]]:
+        return self._points
+
     def __len__(self) -> int:
         return len(self._points)

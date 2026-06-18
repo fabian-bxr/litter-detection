@@ -11,6 +11,7 @@ from litter_agents.agents.reporter import add_llm_summary, build_report
 from litter_agents.agents.search_area import build_search_area_agent, parse_search_area
 from litter_agents.agents.validator import build_validation_agent, make_validate_fn
 from litter_agents.config import AgentSettings
+from litter_agents.debug_render import TrajectoryRenderer
 from litter_agents.hunter.explore import explore
 from litter_agents.hunter.params import HunterParams
 from litter_agents.hunter.planner import ExplorationPlanner
@@ -133,9 +134,14 @@ class MissionController:
 
             # ── exploration ─────────────────────────────────────────────────
             nav = ZenohNavClient(az, pose_tracker, settings)
+            renderer: TrajectoryRenderer | None = None
+            if settings.debug_render:
+                debug_dir = Path(settings.findings_dir) / mission_id / "debug"
+                renderer = TrajectoryRenderer(grid, target, debug_dir)
+                renderer.trajectory.append((start_pose.x, start_pose.y))
             planner.coverage.update(start_pose)
             coverage_task = asyncio.create_task(
-                self._coverage_loop(planner, pose_tracker)
+                self._coverage_loop(planner, pose_tracker, renderer)
             )
             try:
                 stats = await explore(
@@ -151,6 +157,16 @@ class MissionController:
             finally:
                 coverage_task.cancel()
                 await nav.halt()
+                if renderer is not None:
+                    final_pose = pose_tracker.latest or start_pose
+                    path = renderer.save_frame(
+                        planner.coverage.seen,
+                        final_pose,
+                        reachable=planner.coverage.denominator(),
+                        obstacles=planner.dynamic.layer,
+                        name="overview.png",
+                    )
+                    logger.info("Debug frames written to {}", path.parent)
 
             # ── wrap up ─────────────────────────────────────────────────────
             if worker is not None:
@@ -180,14 +196,34 @@ class MissionController:
             az.close()
 
     async def _coverage_loop(
-        self, planner: ExplorationPlanner, pose_tracker: ZenohPoseTracker
+        self,
+        planner: ExplorationPlanner,
+        pose_tracker: ZenohPoseTracker,
+        renderer: TrajectoryRenderer | None = None,
     ) -> None:
-        """Absorb live poses into the coverage grid, including while driving."""
+        """Absorb live poses into the coverage grid, including while driving.
+
+        Doubles as the debug-frame driver: accumulates the trajectory and
+        periodically saves a frame, mirroring the offline sim's render loop.
+        """
         interval = 1.0 / self.settings.coverage_update_hz
+        render_every = self.settings.debug_render_interval_s
+        last_render = -float("inf")
         while True:
             pose = pose_tracker.latest
             if pose is not None:
                 planner.coverage.update(pose)
+                if renderer is not None:
+                    renderer.trajectory.append((pose.x, pose.y))
+                    now = time.monotonic()
+                    if render_every > 0 and now - last_render >= render_every:
+                        renderer.save_frame(
+                            planner.coverage.seen,
+                            pose,
+                            reachable=planner.coverage.denominator(),
+                            obstacles=planner.dynamic.layer,
+                        )
+                        last_render = now
             await asyncio.sleep(interval)
 
     def _persist_report(

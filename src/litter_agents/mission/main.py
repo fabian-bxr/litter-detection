@@ -27,6 +27,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("prompt", help="natural-language search request")
     p.add_argument("--map", default=None, help="map_server YAML (default: settings)")
+    p.add_argument(
+        "--robot-radius", type=float, default=None,
+        help="override robot_radius_m (config-space inflation); never go below "
+        "the real Go2 half-width",
+    )
+    p.add_argument(
+        "--min-gain", type=float, default=None, metavar="M2",
+        help="override min_gain_m2: smallest est. gain (m²) worth a move; lower "
+        "it to chase leftover slivers instead of stopping",
+    )
+    p.add_argument(
+        "--max-dist", type=float, default=None, metavar="M",
+        help="override candidate_max_dist_m: how far (m) a single waypoint may "
+        "reach; raise it to reach distant unseen pockets",
+    )
+    p.add_argument(
+        "--frontier", action=argparse.BooleanOptionalAction, default=None,
+        help="enable/disable the frontier-seeking fallback that repositions "
+        "around corners when greedy scoring stalls (default: settings)",
+    )
+    p.add_argument(
+        "--planner", choices=("greedy", "nbv"), default=None,
+        help="exploration planner: 'nbv' (cluster-commit next-best-view, "
+        "default) or 'greedy' (legacy ray-scorer + frontier fallback)",
+    )
     shape = p.add_mutually_exclusive_group()
     shape.add_argument(
         "--circle", type=float, metavar="R",
@@ -81,11 +106,26 @@ def main() -> None:
             shape="rectangle", width_m=args.rect[0], depth_m=args.rect[1]
         )
 
-    controller = MissionController()
+    from litter_agents.config import AgentSettings
+
+    settings = AgentSettings()
+    overrides = {
+        "robot_radius_m": args.robot_radius,
+        "min_gain_m2": args.min_gain,
+        "candidate_max_dist_m": args.max_dist,
+        "enable_frontier_fallback": args.frontier,
+        "planner_mode": args.planner,
+    }
+    overrides = {k: v for k, v in overrides.items() if v is not None}
+    if overrides:
+        settings = settings.model_copy(update=overrides)
+
+    map_provider = None
     if args.map:
         from litter_agents.mapping.provider import FileMapProvider
 
-        controller = MissionController(map_provider=FileMapProvider(args.map))
+        map_provider = FileMapProvider(args.map)
+    controller = MissionController(settings, map_provider=map_provider)
 
     try:
         report = asyncio.run(

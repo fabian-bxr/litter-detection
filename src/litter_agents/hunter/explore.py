@@ -79,7 +79,8 @@ async def explore(
             candidate.gain_m2,
             planner.coverage.fraction(),
         )
-        result, last_pose = await nav.goto(candidate.target, max_speed)
+        path = planner.last_path or [candidate.target]
+        result, last_pose = await nav.goto_path(path, max_speed)
         if result is not NavResult.ARRIVED:
             stats.n_blocked += 1
             logger.warning("Goto ended {} short of ({:.2f}, {:.2f})",

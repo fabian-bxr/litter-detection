@@ -18,6 +18,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from litter_agents.debug_render import TrajectoryRenderer
 from litter_agents.hunter.explore import explore
 from litter_agents.hunter.params import HunterParams
 from litter_agents.hunter.planner import ExplorationPlanner
@@ -27,61 +28,6 @@ from litter_agents.mapping.grid import GridMap
 from litter_agents.mapping.provider import FileMapProvider
 from litter_agents.mapping.raster import rasterize_area
 from litter_agents.sim.fake_nav import FakeNav, FakePoseSource
-
-
-class SimRenderer:
-    """Draws map + coverage + trajectory; +y is up in the saved images."""
-
-    def __init__(
-        self, grid: GridMap, target: np.ndarray, out_dir: Path, scale: int = 3
-    ) -> None:
-        self._grid = grid
-        self._scale = scale
-        self.out_dir = out_dir
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        base = np.full((grid.height, grid.width, 3), 128, dtype=np.uint8)
-        base[grid.free_mask()] = (255, 255, 255)
-        base[grid.occupied_mask()] = (0, 0, 0)
-        contours, _ = cv2.findContours(
-            target.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
-        )
-        self._base = base
-        self._target_contours = contours
-        self.trajectory: list[tuple[float, float]] = []
-        self._n_frames = 0
-
-    def _to_px(self, x: float, y: float) -> tuple[int, int]:
-        row, col = self._grid.world_to_grid(x, y)
-        return col, row
-
-    def render(self, seen: np.ndarray, pose: Pose2D) -> np.ndarray:
-        img = self._base.copy()
-        img[seen] = (img[seen] * 0.4 + np.array([80, 200, 80]) * 0.6).astype(np.uint8)
-        cv2.drawContours(img, self._target_contours, -1, (255, 120, 0), 1)
-        if len(self.trajectory) > 1:
-            pts = np.array(
-                [self._to_px(x, y) for x, y in self.trajectory], dtype=np.int32
-            )
-            cv2.polylines(img, [pts], False, (0, 0, 255), 1)
-        px = self._to_px(pose.x, pose.y)
-        cv2.circle(img, px, 2, (255, 0, 255), -1)
-        tip = self._to_px(
-            pose.x + 0.5 * np.cos(pose.theta), pose.y + 0.5 * np.sin(pose.theta)
-        )
-        cv2.line(img, px, tip, (255, 0, 255), 1)
-        img = np.flipud(img)  # display with +y up
-        return cv2.resize(
-            img,
-            (img.shape[1] * self._scale, img.shape[0] * self._scale),
-            interpolation=cv2.INTER_NEAREST,
-        )
-
-    def save_frame(self, seen: np.ndarray, pose: Pose2D) -> None:
-        cv2.imwrite(
-            str(self.out_dir / f"frame_{self._n_frames:04d}.png"),
-            self.render(seen, pose),
-        )
-        self._n_frames += 1
 
 
 def default_start(grid: GridMap, robot_radius_m: float) -> Pose2D:
@@ -117,11 +63,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--render-every", type=int, default=20, help="ticks per frame")
     p.add_argument("--coverage", type=float, default=0.95)
     p.add_argument("--max-waypoints", type=int, default=200)
+    p.add_argument("--robot-radius", type=float, default=HunterParams.robot_radius_m)
+    p.add_argument(
+        "--frontier", action=argparse.BooleanOptionalAction, default=True,
+        help="frontier-seeking fallback around corners (default: on)",
+    )
     return p.parse_args(argv)
 
 
 async def run_sim(args: argparse.Namespace) -> dict:
-    params = HunterParams(coverage_target_fraction=args.coverage)
+    params = HunterParams(
+        coverage_target_fraction=args.coverage,
+        robot_radius_m=args.robot_radius,
+        enable_frontier_fallback=args.frontier,
+    )
     grid = await FileMapProvider(args.map).load()
 
     start = (
@@ -142,7 +97,7 @@ async def run_sim(args: argparse.Namespace) -> dict:
     out_dir = Path(args.out) if args.out else Path("runs/sim") / time.strftime(
         "%Y%m%d-%H%M%S"
     )
-    renderer = SimRenderer(grid, target, out_dir)
+    renderer = TrajectoryRenderer(grid, target, out_dir)
 
     tick_count = 0
 
@@ -152,12 +107,17 @@ async def run_sim(args: argparse.Namespace) -> dict:
         renderer.trajectory.append((pose.x, pose.y))
         tick_count += 1
         if args.render_every and tick_count % args.render_every == 0:
-            renderer.save_frame(planner.coverage.seen, pose)
+            renderer.save_frame(
+                planner.coverage.seen, pose, reachable=planner.coverage.denominator()
+            )
 
     nav = FakeNav(
         pose_source,
         blocked_discs=[tuple(b) for b in args.block],
         on_tick=on_tick,
+        grid=grid,
+        blocked_inflated=planner.blocked_inflated(),
+        skip_start_m=params.robot_radius_m,
     )
     planner.coverage.update(start)
     renderer.trajectory.append((start.x, start.y))
@@ -174,7 +134,9 @@ async def run_sim(args: argparse.Namespace) -> dict:
     )
 
     final_pose = pose_source.latest or start
-    renderer.save_frame(planner.coverage.seen, final_pose)
+    renderer.save_frame(
+        planner.coverage.seen, final_pose, reachable=planner.coverage.denominator()
+    )
     result = {
         "stop_reason": stats.stop_reason,
         "coverage": planner.coverage.fraction(),

@@ -4,7 +4,7 @@ import os
 from typing import Literal
 
 import zenoh
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litter_detector.config import TOPICS, Topics
 
@@ -27,17 +27,21 @@ def build_zenoh_config() -> zenoh.Config:
 
 
 class AgentSettings(BaseSettings):
+    # Load secrets/overrides from a .env file at the repo root. Real environment
+    # variables still take precedence over .env values.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     # ── Static map ──────────────────────────────────────────────────────────
     map_yaml_path: str = "my_lab_grid.yaml"
     map_source: Literal["file", "zenoh"] = "file"
 
     # ── Robot & camera geometry ─────────────────────────────────────────────
-    robot_radius_m: float = 0.30  # Go2 half-width ~0.16 m + margin
+    robot_radius_m: float = 0.25  # Go2 half-width ~0.16 m + margin
     camera_fov_deg: float = 70.0
     # Distance at which the detector still reliably spots litter; beyond it a
     # cell does not count as "seen". Together with the near blind spot this
     # makes the visible region an annular wedge.
-    camera_range_m: float = 2.5
+    camera_range_m: float = 3.0
     camera_min_range_m: float = 0.3
 
     # ── Coverage tracking ───────────────────────────────────────────────────
@@ -57,6 +61,24 @@ class AgentSettings(BaseSettings):
     min_gain_m2: float = 0.15
     no_gain_replans_before_stop: int = 3
     coverage_target_fraction: float = 0.95
+    # Frontier-seeking fallback: when no straight-line move gains enough, walk
+    # (multi-leg) toward the nearest unseen reachable cell instead of stopping.
+    enable_frontier_fallback: bool = True
+    frontier_blacklist_radius_m: float = 0.5
+
+    # ── Next-best-view planner ───────────────────────────────────────────────
+    planner_mode: Literal["greedy", "nbv"] = "nbv"
+    n_candidates: int = 16
+    candidate_min_separation_m: float = 0.5
+    candidate_min_step_m: float = 0.4
+    nbv_rotate_in_place: bool = True
+    lambda_cost: float = 0.4
+    gamma_heading: float = 0.3
+    cluster_hysteresis: float = 0.25
+    min_cluster_cells: int = 5
+    standoff_frac_min: float = 0.4
+    standoff_frac_max: float = 0.9
+    frontier_bias: float = 0.8
     # Scoring rays can be coarser than coverage rays — only approximate
     # counts are needed to rank candidates.
     n_scoring_rays: int = 45
@@ -76,6 +98,13 @@ class AgentSettings(BaseSettings):
     # ── Mission safety caps ─────────────────────────────────────────────────
     mission_max_duration_s: float = 1800.0
     mission_max_waypoints: int = 200
+
+    # ── Debug rendering ─────────────────────────────────────────────────────
+    # Drop path-planning debug frames (map + coverage + trajectory) under
+    # runs/missions/<id>/debug/, mirroring the offline sim. A final overview
+    # is always written; set the interval to 0 to disable the periodic frames.
+    debug_render: bool = True
+    debug_render_interval_s: float = 2.0
 
     # ── Detection validation worker ─────────────────────────────────────────
     validation_min_observations: int = 10
@@ -97,8 +126,8 @@ class AgentSettings(BaseSettings):
     # ── LLM / Ollama Cloud ──────────────────────────────────────────────────
     ollama_base_url: str = "https://ollama.com/v1"
     ollama_api_key: str = ""  # env: OLLAMA_API_KEY
-    vision_model_name: str = "gemma3:27b"
-    text_model_name: str = "gemma3:27b"
+    vision_model_name: str = "gemma4:31b"
+    text_model_name: str = "gemma4:31b"
     # Ollama Cloud does not support NativeOutput (json_schema enforcement);
     # "prompted" is the most robust mode on open vision models.
     agent_output_mode: Literal["prompted", "tool"] = "prompted"

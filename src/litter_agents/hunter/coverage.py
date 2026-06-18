@@ -66,6 +66,11 @@ class CoverageTracker:
         self._reachable = reachable
         self._denom = None
 
+    @property
+    def reachable(self) -> np.ndarray:
+        """Cells in the start's connected free component (frontier search uses it)."""
+        return self._reachable
+
     def denominator(self) -> np.ndarray:
         if self._denom is None:
             self._denom = self._target & self._grid.free_mask() & self._reachable

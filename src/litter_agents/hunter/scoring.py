@@ -21,6 +21,90 @@ class Candidate:
     score: float
 
 
+def _orient_toward_unseen(
+    x: float,
+    y: float,
+    r_max_sq: float,
+    unseen_xs: np.ndarray,
+    unseen_ys: np.ndarray,
+) -> float:
+    """Aim the camera at the centroid of unseen cells within FOV range.
+
+    One raycast per candidate instead of an N-orientation scan; the heading is
+    continuous (not quantized), so heading sequences stay smooth. ``unseen_xs``
+    / ``unseen_ys`` are the unseen cell centres in world coords, precomputed
+    once by the caller (this runs per candidate)."""
+    if len(unseen_xs) == 0:
+        return 0.0
+    dx, dy = unseen_xs - x, unseen_ys - y
+    in_range = (dx * dx + dy * dy) <= r_max_sq
+    if in_range.any():
+        cx, cy = float(unseen_xs[in_range].mean()), float(unseen_ys[in_range].mean())
+    else:
+        cx, cy = float(unseen_xs.mean()), float(unseen_ys.mean())
+    return math.atan2(cy - y, cx - x)
+
+
+def score_viewpoints(
+    current: Pose2D,
+    positions: list[tuple[float, float]],
+    *,
+    grid: GridMap,
+    blocked_raw: np.ndarray,
+    unseen_target: np.ndarray,
+    params: HunterParams,
+) -> list[Candidate]:
+    """Cost-utility scoring of sampled viewpoints (NBV planner).
+
+        score = new_cells * exp(-lambda_cost * d) * (1 + gamma_heading * cos(dtheta))
+
+    Multiplicative distance discount (never negative, doesn't blow up late in
+    the mission); the cos(dtheta) term rewards committing to a heading over
+    zig-zagging. Each viewpoint's orientation aims at the unseen centroid in
+    FOV reach.
+    """
+    view_range_cells = params.camera_range_m / grid.resolution
+    view_min_cells = params.camera_min_range_m / grid.resolution
+    # Unseen cell centres in world coords, computed once (orientation reuses).
+    rs, cs = np.where(unseen_target)
+    unseen_xs = grid.origin_x + (cs.astype(np.float64) + 0.5) * grid.resolution
+    unseen_ys = grid.origin_y + (rs.astype(np.float64) + 0.5) * grid.resolution
+    r_max_sq = (params.camera_range_m + grid.resolution) ** 2
+    out: list[Candidate] = []
+    for x, y in positions:
+        theta = _orient_toward_unseen(x, y, r_max_sq, unseen_xs, unseen_ys)
+        vis = visible_cells(
+            blocked_raw,
+            grid.world_to_grid_f(x, y),
+            theta,
+            params.fov_rad,
+            view_range_cells,
+            view_min_cells,
+            params.n_scoring_rays,
+        )
+        new_cells = int((vis & unseen_target).sum())
+        d = current.distance_to(Pose2D(x=x, y=y, theta=theta))
+        if d > 1e-9:
+            bearing = current.bearing_to(Pose2D(x=x, y=y, theta=theta))
+            heading_factor = 1.0 + params.gamma_heading * math.cos(
+                normalize_angle(bearing - current.theta)
+            )
+        else:
+            heading_factor = 1.0
+        gain_m2 = new_cells * grid.resolution**2
+        score = gain_m2 * math.exp(-params.lambda_cost * d) * heading_factor
+        out.append(
+            Candidate(
+                target=Pose2D(x=x, y=y, theta=float(theta)),
+                distance_m=float(d),
+                gain_m2=float(gain_m2),
+                turn_rad=float(abs(normalize_angle(theta - current.theta))),
+                score=float(score),
+            )
+        )
+    return out
+
+
 def generate_candidates(
     pose: Pose2D,
     *,

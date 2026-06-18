@@ -26,6 +26,14 @@ class NavInterface(Protocol):
         """
         ...
 
+    async def goto_path(
+        self, path: list[Pose2D], max_speed: float
+    ) -> tuple[NavResult, Pose2D | None]:
+        """Drive a polyline of straight legs (each collision-free in config
+        space) to ``path[-1]``, resolving on the first non-ARRIVED leg or on
+        final arrival. Returns the result and the last reported pose."""
+        ...
+
     async def halt(self) -> None:
         """Stop the robot and cancel any active request."""
         ...

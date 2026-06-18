@@ -24,6 +24,17 @@ def _decode_status(sample: zenoh.Sample) -> NavigationStatus:
     return NavigationStatus.model_validate_json(sample.payload.to_bytes())
 
 
+def _path_length(start: Pose2D | None, path: list[Pose2D]) -> float:
+    """Total polyline length from ``start`` through every leg (for the timeout)."""
+    total = 0.0
+    prev = start or (path[0] if path else None)
+    for leg in path:
+        if prev is not None:
+            total += prev.distance_to(leg)
+        prev = leg
+    return total
+
+
 class ZenohNavClient:
     """Waypoint execution against the robodog nav stack.
 
@@ -55,22 +66,36 @@ class ZenohNavClient:
     async def goto(
         self, target: Pose2D, max_speed: float
     ) -> tuple[NavResult, Pose2D | None]:
+        return await self.goto_path([target], max_speed)
+
+    async def goto_path(
+        self, path: list[Pose2D], max_speed: float
+    ) -> tuple[NavResult, Pose2D | None]:
+        if not path:
+            return NavResult.ARRIVED, self._pose_source.latest
+        target = path[-1]
         request_id = uuid.uuid4().hex
-        segment = NavigationSegment(
-            target=target,
-            max_speed=max_speed,
-            allowed_deviation=self._settings.nav_allowed_deviation,
-            must_stop=True,
-            orientation_at_target=target.theta,
-        )
+        # One request, multiple straight segments: the executor flows through
+        # the intermediate corners (must_stop=False) and only halts at the
+        # final viewpoint, facing its orientation.
+        segments = [
+            NavigationSegment(
+                target=leg,
+                max_speed=max_speed,
+                allowed_deviation=self._settings.nav_allowed_deviation,
+                must_stop=(i == len(path) - 1),
+                orientation_at_target=leg.theta,
+            )
+            for i, leg in enumerate(path)
+        ]
         self._drain()
         self._az.publish_json(
             NAV_REQUEST_TOPIC,
-            NavigationRequest(request_id=request_id, segments=[segment]),
+            NavigationRequest(request_id=request_id, segments=segments),
         )
 
         start_pose = self._pose_source.latest
-        distance = start_pose.distance_to(target) if start_pose else 0.0
+        distance = _path_length(start_pose, path)
         deadline = time.monotonic() + max(
             20.0, self._settings.nav_goal_timeout_factor * distance / max(max_speed, 0.05)
         )
