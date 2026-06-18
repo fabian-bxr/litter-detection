@@ -29,6 +29,36 @@ Based on these information, research into these ideas and create a plan first be
 
 
 
+## Follow-up prompts (interactive build session)
+
+These are the prompts given during the iterative implementation that followed
+the initial plan, in order:
+
+1. How do i set up the OLLAMA cloud api in this project?
+2. I've added an .env file, can you use this for loading
+3. How do i now run the agents
+4. *(pasted `litter-mission` traceback — `ValidationError: SearchAreaSpec shape Field required` → `UnexpectedModelBehavior: Exceeded maximum output retries (2)`; the model returned the JSON-schema envelope instead of an instance)*
+5. It worked before already, can you switch to gemma4? its a new model
+6. It feels the path planning stops fairly early, when prompting for 20m circle, it stops fairly early and says 18m² are reachable, but looking at the overview of the newest run. Why is this happening? Can we visualize the area that can be covered?
+7. Can i specify the robot radius when running the mission? Also, in my last run the robot aborted fairly early due to no more information gain, although there were still areas undiscovered i think. What can we tune there?
+8. yes add the cli flags
+9. Can you run the simulation with and try to see with which parameters we can tune the coverage of the map. Use the current robot position for the starting location.
+10. Sketch the frontier-seeking fallback to help seek out some further away areas
+11. Yes implement this
+12. One problem is that the new frontier algorithm is generating a lot of short paths that dont result in good obersvations. I have tried a different approach in the i believe agents-setup branch. Can you check this frontier algorithm implementation and suggest a plan how we can continue.
+13. Yes implement this
+14. What is phase 3
+15. The current nav only accepts straight lines, is this already implemented in such a way? Also, can we see a debug output of the path? *(interrupted)*
+16. Actually, just check for the straight lines. Also, the robot radius should be 0.25 again or its too tight
+17. Yes verify the path is actually traversable. Currently there is no avoidance if the path is blocked
+18. How can i run a real test with the robot now?
+19. Can you also show the reachable area in the debug overview image
+20. Any parts we could optimize for generating the next waypoint? some of the moves are quite small
+21. reduce the detection range to 1m
+22. increase range to 3m
+23. Commit the changes
+24. Can you add my prompts to you to the prompts/litter-agents.md and commit, also add the deb_lab_grid.png
+
 | Metric                              | Score                             |
 |-------------------------------------|-----------------------------------|
 | **Tool used**                       | Claude Code, Fable 5 Extra Effort |
