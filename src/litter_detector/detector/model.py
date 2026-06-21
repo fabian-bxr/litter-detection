@@ -15,16 +15,21 @@ _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MODEL_URI = str(REPO_ROOT / "models" / "best_yolov8s_seg.pt")
+DEFAULT_MODEL_URI = str(REPO_ROOT / "models" / "best_yolo11s_seg.pt")
 _MLFLOW_SCHEMES = ("models:/", "runs:/", "mlflow://")
-_YOLO_CONF = float(os.environ.get("YOLO_CONF", "0.05"))
+# Confidence threshold: higher = fewer false positives (precision over recall).
+_YOLO_CONF = float(os.environ.get("YOLO_CONF", "0.25"))
 YOLO_IMGSZ = int(os.environ.get("YOLO_IMGSZ", "1280"))
-_YOLO_DILATE = int(os.environ.get("YOLO_MASK_DILATE", "5"))
+# Mask dilation in px; 0 = off. Enlarging masks also enlarges false positives.
+_YOLO_DILATE = int(os.environ.get("YOLO_MASK_DILATE", "0"))
 # Mask binarization threshold: higher = only confident pixels → tighter masks.
 _YOLO_MASK_THRESH = float(os.environ.get("YOLO_MASK_THRESH", "0.5"))
 # Erode the mask by this kernel size (px) to shrink it; 0 = off. Applied before
 # dilation, so set DILATE=0 when using erosion.
 _YOLO_ERODE = int(os.environ.get("YOLO_MASK_ERODE", "0"))
+# Drop detections whose mask covers less than this fraction of the frame; this
+# removes tiny speck-like false positives. 0 = off.
+_YOLO_MIN_AREA = float(os.environ.get("YOLO_MIN_AREA", "0.0005"))
 
 
 class _YoloSegModel(nn.Module):
@@ -62,17 +67,21 @@ class _YoloSegModel(nn.Module):
         )
         res = results[0]
 
+        keep = self._area_keep(res)
+
         mask = np.zeros((h, w), dtype=np.float32)
         if res.masks is not None and len(res.masks.data) > 0:
             md = res.masks.data.detach().cpu().numpy()  # [N, mh, mw], 0..1
-            combined = (md.max(axis=0) > _YOLO_MASK_THRESH).astype(np.float32)
-            if combined.shape != (h, w):
-                combined = cv2.resize(
-                    combined, (w, h), interpolation=cv2.INTER_NEAREST
-                )
-            mask = combined
+            md = md[keep]
+            if len(md) > 0:
+                combined = (md.max(axis=0) > _YOLO_MASK_THRESH).astype(np.float32)
+                if combined.shape != (h, w):
+                    combined = cv2.resize(
+                        combined, (w, h), interpolation=cv2.INTER_NEAREST
+                    )
+                mask = combined
 
-        self._last_tracks = self._extract_tracks(res)
+        self._last_tracks = self._extract_tracks(res, keep)
 
         if _YOLO_ERODE > 0 and mask.any():
             kernel = cv2.getStructuringElement(
@@ -90,7 +99,26 @@ class _YoloSegModel(nn.Module):
         return torch.from_numpy(logits).reshape(1, 1, h, w).to(tensor.device)
 
     @staticmethod
-    def _extract_tracks(res) -> list[dict]:
+    def _area_keep(res) -> np.ndarray:
+        """Boolean mask over detections, dropping ones below YOLO_MIN_AREA."""
+        boxes = res.boxes
+        n = 0 if boxes is None else len(boxes)
+        if res.masks is not None:
+            n = len(res.masks.data)
+        if n == 0:
+            return np.zeros(0, dtype=bool)
+        if _YOLO_MIN_AREA <= 0:
+            return np.ones(n, dtype=bool)
+        if res.masks is not None and len(res.masks.data) == n:
+            md = res.masks.data.detach().cpu().numpy()
+            areas = np.array([float((m > _YOLO_MASK_THRESH).mean()) for m in md])
+        else:
+            xywhn = boxes.xywhn.cpu().numpy()
+            areas = np.array([float(bw * bh) for (_, _, bw, bh) in xywhn])
+        return areas >= _YOLO_MIN_AREA
+
+    @staticmethod
+    def _extract_tracks(res, keep: np.ndarray | None = None) -> list[dict]:
         boxes = res.boxes
         if boxes is None or boxes.id is None or len(boxes) == 0:
             return []
@@ -104,6 +132,8 @@ class _YoloSegModel(nn.Module):
             areas = [float(bw * bh) for (_, _, bw, bh) in xywhn]
         tracks = []
         for i, tid in enumerate(ids):
+            if keep is not None and i < len(keep) and not keep[i]:
+                continue
             cx, cy, bw, bh = (float(v) for v in xywhn[i])
             tracks.append({
                 "id": int(tid),

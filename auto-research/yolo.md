@@ -27,10 +27,12 @@ Tracks (mit stabilen IDs) exponiert und auf Zenoh sowie in eine SQLite-DB geschr
   löste versehentlich ein echtes Training aus. Behoben (YOLO nicht als
   nn.Module-Kind registrieren + `train()` neutralisiert).
 
-### 3. Recall-Optimierung (Inferenz, ohne Retraining)
+### 3. Inferenz-Tuning (ohne Retraining)
 - Inferenz-Auflösung **1280** (`YOLO_IMGSZ`)
-- Confidence **0.05** (`YOLO_CONF`)
-- Masken-Dilatation **5 px** (`YOLO_MASK_DILATE`)
+- Confidence **0.25** (`YOLO_CONF`) — präzisionsfreundlicher Default gegen Fehlalarme
+  (für maximalen Recall ggf. auf 0.05 senken)
+- Flächenfilter **0.0005** (`YOLO_MIN_AREA`) — verwirft winzige Speck-Detektionen
+- Masken-Dilatation **0** (`YOLO_MASK_DILATE`)
 - TTA verworfen (von Segmentierungsmodellen nicht unterstützt)
 
 ### 4. Tracker-Ausgabe für Zenoh
@@ -85,8 +87,11 @@ Weiterer Gewinn nur über mehr/domänennähere Daten.
 |----------|---------|---------|
 | `MLFLOW_MODEL_URI` | `models/best_yolo11s_seg.pt` | aktives Modell (`.pt` = YOLO; `models:/…` = U-Net-Fallback) |
 | `YOLO_IMGSZ` | `1280` | Inferenz-Auflösung |
-| `YOLO_CONF` | `0.05` | Confidence-Schwelle (niedriger = mehr Recall, mehr Fehlalarme) |
-| `YOLO_MASK_DILATE` | `5` | Masken-Dilatation in px (0 = aus) |
+| `YOLO_CONF` | `0.25` | Confidence-Schwelle (niedriger = mehr Recall, höher = weniger Fehlalarme) |
+| `YOLO_MIN_AREA` | `0.0005` | Min. Maskenfläche als Bildanteil; verwirft winzige Speck-Fehlalarme (0 = aus) |
+| `YOLO_MASK_DILATE` | `0` | Masken-Dilatation in px (0 = aus) — vergrößert Fläche |
+| `YOLO_MASK_ERODE` | `0` | Masken-Erosion in px (0 = aus) — verkleinert Fläche |
+| `YOLO_MASK_THRESH` | `0.5` | Binarisierungs-Schwelle (höher = enger; bei YOLO-Seg kaum wirksam) |
 | `REGISTRY_DB_PATH` | `object_registry.db` | SQLite-Registry (leer = aus) |
 
 ## Verwendung
@@ -98,8 +103,8 @@ uv run python auto-research/train_yolo.py
 # Live-Detector (nutzt models/best_yolo11s_seg.pt als Default)
 uv run detector
 
-# Weniger Fehlalarme (Recall ↔ Precision)
-YOLO_CONF=0.10 uv run detector
+# Noch weniger Fehlalarme (Recall ↔ Precision)
+YOLO_CONF=0.35 uv run detector
 ```
 
 ## Modelle

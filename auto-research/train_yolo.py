@@ -18,7 +18,7 @@ if __name__ == "__main__":
         imgsz=960,
         batch=16,
         project=str(REPO_ROOT / "runs" / "yolo"),
-        name="litter-yolo11s-seg-768-aug",
+        name="litter-yolo11s-seg-fp-tuned",
 
         pretrained=True,
         optimizer="AdamW",
@@ -27,11 +27,14 @@ if __name__ == "__main__":
         cos_lr=True,
         lrf=0.1,
         warmup_epochs=3,
-        copy_paste=0.3,
-        mixup=0.1,
+        # Tamed synthetic augmentation → more conservative model, fewer false
+        # positives (slight recall trade-off).
+        copy_paste=0.1,
+        mixup=0.0,
+        mosaic=0.5,
+        close_mosaic=10,  # disable mosaic for the last 10 epochs (clean finish)
         weight_decay=0.0005,
         overlap_mask=True,
-        mosaic=0.7,
         dropout=0.1,
     )
 
