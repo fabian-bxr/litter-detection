@@ -208,6 +208,73 @@ class FindingsRepository:
         )
         self._conn.commit()
 
+    def list_missions(self) -> list[dict]:
+        rows = self._conn.execute(
+            "SELECT mission_id, prompt, started_ns, finished_ns, coverage_fraction,"
+            " distance_m, n_waypoints, n_blocked FROM missions ORDER BY started_ns DESC"
+        ).fetchall()
+        result = []
+        for r in rows:
+            mission_id = str(r[0])
+            result.append(
+                {
+                    "mission_id": mission_id,
+                    "prompt": r[1],
+                    "started_ns": r[2],
+                    "finished_ns": r[3],
+                    "coverage_fraction": r[4],
+                    "distance_m": r[5],
+                    "n_waypoints": r[6],
+                    "n_blocked": r[7],
+                    "status_counts": self.status_counts(mission_id),
+                }
+            )
+        return result
+
+    def get_finding(self, mission_id: str, track_id: int) -> "FindingRow | None":
+        row = self._conn.execute(
+            "SELECT mission_id, track_id, status, category, confidence, description,"
+            " model_name, robot_x, robot_y, robot_theta, bearing_rad,"
+            " bbox_x, bbox_y, bbox_w, bbox_h, area_px, n_observations,"
+            " first_seen_ns, last_seen_ns, validated_at_ns, image_path,"
+            " context_image_path, raw_response FROM findings"
+            " WHERE mission_id = ? AND track_id = ?",
+            (mission_id, track_id),
+        ).fetchone()
+        return _finding_from_row(row) if row else None
+
+    def delete_finding(self, mission_id: str, track_id: int) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM findings WHERE mission_id = ? AND track_id = ?",
+            (mission_id, track_id),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def update_finding(
+        self,
+        mission_id: str,
+        track_id: int,
+        *,
+        category: str | None = None,
+        status: str | None = None,
+    ) -> bool:
+        updates: list[tuple[str, object]] = []
+        if category is not None:
+            updates.append(("category", category))
+        if status is not None:
+            updates.append(("status", status))
+        if not updates:
+            return False
+        set_clause = ", ".join(f"{col} = ?" for col, _ in updates)
+        values: list[object] = [val for _, val in updates] + [mission_id, track_id]
+        cur = self._conn.execute(
+            f"UPDATE findings SET {set_clause} WHERE mission_id = ? AND track_id = ?",
+            values,
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
     def close(self) -> None:
         self._conn.close()
 

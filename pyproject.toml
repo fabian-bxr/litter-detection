@@ -40,6 +40,8 @@ dependencies = [
     "scipy>=1.11.0",
     "pydantic-ai-slim[openai]>=1.0.0",
     "pyyaml>=6.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
 ]
 
 [project.scripts]
@@ -47,6 +49,7 @@ camera = "litter_detector.camera.main:main"
 detector = "litter_detector.detector.main:main"
 litter-mission = "litter_agents.mission.main:main"
 litter-sim = "litter_agents.sim.sim_main:main"
+litter-ui = "litter_ui.app:main"
 
 [tool.pytest.ini_options]
 markers = [
@@ -60,7 +63,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/litter_detector", "src/litter_agents"]
+packages = ["src/litter_detector", "src/litter_agents", "src/litter_ui"]
 
 [dependency-groups]
 dev = [
