@@ -38,6 +38,9 @@ az: AsyncZenoh | None = None
 # Camera: raw JPEG bytes, drop-oldest queue (4 frames ≈ 270 ms at 15 fps).
 camera_queue: asyncio.Queue[bytes] | None = None
 
+# Detection overlay: masked_frame from the detector (None when detector not running).
+detection_queue: asyncio.Queue[bytes] | None = None
+
 # Robot state (mutated only on the asyncio event loop).
 pose_latest: Pose2D | None = None
 path_history: deque[tuple[float, float]] = deque(maxlen=10_000)
@@ -113,13 +116,20 @@ async def startup() -> None:
     Must be called from within a running event loop (FastAPI lifespan).
     Any exception is caught so the app starts even without a Zenoh router.
     """
-    global az, camera_queue
+    global az, camera_queue, detection_queue
     try:
         _az = AsyncZenoh(build_zenoh_config())
 
         # Camera frames — drop-oldest queue, subscriber kept alive in _az.
         camera_queue = _az.subscribe_queue(
             TOPICS.camera.frame,
+            lambda s: s.payload.to_bytes(),
+            maxsize=4,
+        )
+
+        # Detection overlay (litter/masked_frame) from the detector process.
+        detection_queue = _az.subscribe_queue(
+            TOPICS.detection.masked_frame,
             lambda s: s.payload.to_bytes(),
             maxsize=4,
         )
@@ -153,6 +163,7 @@ async def startup() -> None:
         logger.warning("Zenoh unavailable — live data disabled: {}", exc)
         az = None
         camera_queue = None
+        detection_queue = None
 
 
 def shutdown() -> None:

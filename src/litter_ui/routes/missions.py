@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
 
+from litter_agents.agents.validator import build_validation_agent, make_validate_fn
 from litter_agents.config import AgentSettings
 from litter_agents.hunter.explore import explore
 from litter_agents.hunter.params import HunterParams
@@ -24,6 +25,8 @@ from litter_agents.mission.orchestrator import MissionController
 from litter_agents.sim.fake_nav import FakeNav, FakePoseSource
 from litter_agents.sim.sim_main import default_start
 from litter_agents.validation.findings import FindingsRepository
+from litter_agents.validation.worker import DetectionValidationWorker
+from litter_agents.zenoh_bridge import AsyncZenoh
 
 router = APIRouter(tags=["mission"])
 
@@ -175,12 +178,85 @@ async def _run_sim(body: "StartBody") -> None:
     )
 
 
+# ── Detection-test runner ─────────────────────────────────────────────────────
+
+async def _run_detection_test(body: "StartBody") -> None:
+    """Validation worker only — no navigation, no robot needed.
+
+    Subscribes to litter/tracked + litter/frame from the running detector,
+    crops stable tracks, sends to Ollama for validation, and saves results.
+    All findings land at robot position (0, 0) since there is no real pose.
+    """
+    global _current_mission_id
+
+    settings = AgentSettings()
+    mission_id = time.strftime("%Y%m%d-%H%M%S") + "-camtest-" + uuid.uuid4().hex[:4]
+
+    db_path = Path(settings.findings_db_path)
+    if not db_path.is_absolute():
+        db_path = _REPO_ROOT / db_path
+
+    repo = FindingsRepository(db_path)
+
+    # Dummy pose — robot sits at origin. Findings still get crop images saved.
+    pose_source = FakePoseSource(Pose2D(x=0.0, y=0.0, theta=0.0))
+
+    # Separate Zenoh session so the validation worker can manage its own subs.
+    az = AsyncZenoh(settings.zenoh_config())
+
+    if not settings.ollama_api_key:
+        logger.warning(
+            "OLLAMA_API_KEY nicht gesetzt — Findings werden als 'error' gespeichert, "
+            "Bilder werden trotzdem gesichert."
+        )
+
+    validation_agent = build_validation_agent(settings)
+    worker = DetectionValidationWorker(
+        az,
+        pose_source,
+        repo,
+        make_validate_fn(validation_agent, settings),
+        settings,
+        mission_id,
+    )
+
+    repo.start_mission(mission_id, body.prompt, None, time.time_ns())
+    worker.start()
+    logger.info(
+        "Kamera-Test {} gestartet — halte Müll ≥{}× vor die Kamera und warte.",
+        mission_id,
+        settings.validation_min_observations,
+    )
+
+    try:
+        while True:
+            await asyncio.sleep(1.0)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        logger.info("Draining validation queue…")
+        await worker.stop(drain_timeout_s=30.0)
+        repo.finish_mission(
+            mission_id,
+            finished_ns=time.time_ns(),
+            coverage_fraction=0.0,
+            distance_m=0.0,
+            n_waypoints=0,
+            n_blocked=0,
+            report_json="{}",
+        )
+        repo.close()
+        az.close()
+        _current_mission_id = mission_id
+
+
 # ── Request/response models ───────────────────────────────────────────────────
 
 class StartBody(BaseModel):
     prompt: str
     circle_radius_m: float | None = None
     sim_mode: bool = False
+    detection_test: bool = False
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -200,7 +276,9 @@ async def mission_start(body: StartBody) -> dict:
     async def _run() -> None:
         global _sink_id, _current_mission_id
         try:
-            if body.sim_mode:
+            if body.detection_test:
+                await _run_detection_test(body)
+            elif body.sim_mode:
                 await _run_sim(body)
             else:
                 area_spec: SearchAreaSpec | None = None

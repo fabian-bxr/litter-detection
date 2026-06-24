@@ -35,6 +35,30 @@ async def ws_camera(ws: WebSocket) -> None:
         pass
 
 
+@router.websocket("/ws/detection")
+async def ws_detection(ws: WebSocket) -> None:
+    await ws.accept()
+
+    if state.detection_queue is None:
+        await ws.send_text(json.dumps({"error": "zenoh_unavailable"}))
+        await ws.close()
+        return
+
+    try:
+        while True:
+            try:
+                frame: bytes = await asyncio.wait_for(
+                    state.detection_queue.get(), timeout=5.0
+                )
+                await ws.send_bytes(frame)
+            except asyncio.TimeoutError:
+                await ws.send_text(json.dumps({"keepalive": True}))
+    except WebSocketDisconnect:
+        pass
+    except asyncio.CancelledError:
+        pass
+
+
 @router.websocket("/ws/state")
 async def ws_state(ws: WebSocket) -> None:
     await ws.accept()

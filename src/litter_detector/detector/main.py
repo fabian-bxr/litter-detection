@@ -60,6 +60,7 @@ class LitterDetector:
         self.topics = Settings.topics()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        self.runner: model_mod.AnyRunner
         self.runner, resolved_uri = model_mod.load_model(model_uri, self.device)
         logger.info(f"Model loaded from {resolved_uri} on device={self.device}")
 
@@ -137,28 +138,31 @@ class LitterDetector:
                     logger.error("Failed to decode JPEG frame")
                     return
 
-            with tracer.start_as_current_span("preprocess"):
-                tensor = model_mod.preprocess(frame_bgr, self.device)
+            h, w = frame_bgr.shape[:2]
 
             with tracer.start_as_current_span("inference"):
                 inf_start = time.perf_counter()
-                logits = self.runner.infer(tensor)
+                if isinstance(self.runner, model_mod.YoloRunner):
+                    # YOLO handles its own preprocessing internally; returns
+                    # (mask_uint8, probs_float) at full frame resolution.
+                    mask, probs = self.runner.infer_frame(
+                        frame_bgr, self.settings.detector_prob_threshold
+                    )
+                else:
+                    tensor = model_mod.preprocess(frame_bgr, self.device)
+                    logits = self.runner.infer(tensor)
+                    probs = model_mod.probs_from_logits(logits, (h, w))
+                    # Temporal EWMA smooths flicker from a shaking camera.
+                    alpha = self.settings.detector_temporal_alpha
+                    if alpha > 0.0 and self._prev_probs is not None and self._prev_probs.shape == probs.shape:
+                        probs = (alpha * self._prev_probs + (1.0 - alpha) * probs).astype(np.float32)
+                    self._prev_probs = probs
+                    mask = model_mod.binarize(probs, self.settings.detector_prob_threshold)
                 inf_ms = (time.perf_counter() - inf_start) * 1000
                 detector_metrics.inference_time_ms.record(inf_ms)
                 span.set_attribute("inference.time_ms", inf_ms)
 
             with tracer.start_as_current_span("postprocess"):
-                h, w = frame_bgr.shape[:2]
-                probs = model_mod.probs_from_logits(logits, (h, w))
-                # Temporal EWMA across consecutive frames smooths the flicker
-                # caused by a shaking camera: pixels that the model only
-                # half-saw on this frame survive into the next thresholding
-                # step if they were strong on the previous one.
-                alpha = self.settings.detector_temporal_alpha
-                if alpha > 0.0 and self._prev_probs is not None and self._prev_probs.shape == probs.shape:
-                    probs = (alpha * self._prev_probs + (1.0 - alpha) * probs).astype(np.float32)
-                self._prev_probs = probs
-                mask = model_mod.binarize(probs, self.settings.detector_prob_threshold)
                 mask = model_mod.morph_close(mask, self.settings.detector_morph_close_kernel)
                 overlay_img = model_mod.overlay(frame_bgr, mask)
                 coverage = float((mask > 0).mean())
@@ -276,9 +280,10 @@ def main() -> None:
         "--model",
         default=model_mod.resolve_default_uri(),
         help=(
-            "Model source: MLflow URI ('models:/name/version', 'runs:/<id>/model') "
-            "or a local .onnx file path. Defaults to LITTER_MODEL_URI / MLFLOW_MODEL_URI "
-            f"env vars, then {model_mod.DEFAULT_MODEL_URI!r}."
+            "Model source: MLflow URI ('models:/name/version', 'runs:/<id>/model'), "
+            "a local .onnx file (U-Net), or a local .pt file (YOLO11-seg via ultralytics). "
+            "Defaults to LITTER_MODEL_URI / MLFLOW_MODEL_URI env vars, "
+            f"then {model_mod.DEFAULT_MODEL_URI!r}."
         ),
     )
     args = parser.parse_args()

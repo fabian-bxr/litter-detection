@@ -18,9 +18,10 @@ function logColor(line: string): string {
 }
 
 export default function ChatPanel({ onMissionComplete }: Props) {
+  type MissionMode = 'sim' | 'camtest' | 'real'
   const [prompt, setPrompt] = useState('')
   const [circleRadius, setCircleRadius] = useState<number | ''>(5)
-  const [simMode, setSimMode] = useState(true)
+  const [missionMode, setMissionMode] = useState<MissionMode>('camtest')
   const [isRunning, setIsRunning] = useState(false)
   const [logLines, setLogLines] = useState<string[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -80,8 +81,13 @@ export default function ChatPanel({ onMissionComplete }: Props) {
     setError(null)
     setLogLines([])
 
-    const body: Record<string, unknown> = { prompt: prompt.trim(), sim_mode: simMode }
-    if (circleRadius !== '' && circleRadius > 0) body.circle_radius_m = circleRadius
+    const body: Record<string, unknown> = {
+      prompt: prompt.trim(),
+      sim_mode: missionMode === 'sim',
+      detection_test: missionMode === 'camtest',
+    }
+    if (missionMode !== 'camtest' && circleRadius !== '' && circleRadius > 0)
+      body.circle_radius_m = circleRadius
 
     const res = await fetch('/api/mission/start', {
       method: 'POST',
@@ -123,17 +129,29 @@ export default function ChatPanel({ onMissionComplete }: Props) {
         onKeyDown={(e) => { if (e.key === 'Enter' && e.ctrlKey) void handleStart() }}
       />
 
-      {/* Sim toggle */}
-      <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: simMode ? '#81c784' : '#555', flexShrink: 0, cursor: 'pointer' }}>
-        <input
-          type="checkbox"
-          checked={simMode}
-          onChange={(e) => setSimMode(e.target.checked)}
-          disabled={isRunning}
-          style={{ accentColor: '#4caf50' }}
-        />
-        Sim-Modus (kein Roboter nötig)
-      </label>
+      {/* Mode selector */}
+      <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+        {([
+          ['camtest', 'Kamera-Test', '#1565c0', 'Detektor läuft, kein Roboter nötig'],
+          ['sim',     'Karten-Sim',  '#2e7d32', 'Fake-Navigation auf Karte, kein Detektor'],
+          ['real',    'Roboter',     '#6a1b9a', 'Vollbetrieb mit echtem Robot'],
+        ] as [string, string, string, string][]).map(([val, label, color, title]) => (
+          <button
+            key={val}
+            title={title}
+            onClick={() => !isRunning && setMissionMode(val as MissionMode)}
+            style={{
+              flex: 1, padding: '4px 0', fontSize: 10, borderRadius: 3, border: 'none',
+              cursor: isRunning ? 'not-allowed' : 'pointer',
+              background: missionMode === val ? color : '#252525',
+              color: missionMode === val ? '#fff' : '#555',
+              fontWeight: missionMode === val ? 600 : 400,
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
       {/* Controls row */}
       <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
@@ -181,11 +199,11 @@ export default function ChatPanel({ onMissionComplete }: Props) {
       {isRunning && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, flexShrink: 0 }}>
           <span style={{
-            width: 7, height: 7, borderRadius: '50%', background: simMode ? '#4caf50' : '#ff9800',
+            width: 7, height: 7, borderRadius: '50%', background: missionMode === 'sim' ? '#4caf50' : missionMode === 'camtest' ? '#2196f3' : '#ff9800',
             display: 'inline-block', animation: 'pulse 1.2s infinite',
           }} />
-          <span style={{ color: simMode ? '#4caf50' : '#ff9800' }}>
-            {simMode ? 'Sim läuft…' : 'Mission läuft…'}
+          <span style={{ color: missionMode === 'sim' ? '#4caf50' : missionMode === 'camtest' ? '#2196f3' : '#ff9800', marginLeft: 4 }}>
+            {missionMode === 'sim' ? 'Karten-Sim läuft…' : missionMode === 'camtest' ? 'Kamera-Test läuft…' : 'Mission läuft…'}
           </span>
         </div>
       )}

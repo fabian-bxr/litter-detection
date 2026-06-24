@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
+type Mode = 'camera' | 'detection'
 type Status = 'connecting' | 'connected' | 'no_signal' | 'zenoh_unavailable'
 
 const STATUS_LABEL: Record<Status, string> = {
@@ -16,15 +17,20 @@ const STATUS_COLOR: Record<Status, string> = {
   zenoh_unavailable: '#ff9800',
 }
 
+const WS_PATH: Record<Mode, string> = {
+  camera: '/ws/camera',
+  detection: '/ws/detection',
+}
+
 export default function CameraPanel() {
   const imgRef = useRef<HTMLImageElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const prevUrlRef = useRef<string | null>(null)
   const [status, setStatus] = useState<Status>('connecting')
+  const [mode, setMode] = useState<Mode>('camera')
 
   useEffect(() => {
     let cancelled = false
-    // Track status in a closure-local var to avoid stale captures in callbacks.
     let currentStatus: Status = 'connecting'
 
     function setS(s: Status) {
@@ -36,7 +42,7 @@ export default function CameraPanel() {
       if (cancelled) return
       setS('connecting')
 
-      const ws = new WebSocket(`ws://${location.host}/ws/camera`)
+      const ws = new WebSocket(`ws://${location.host}${WS_PATH[mode]}`)
       wsRef.current = ws
 
       ws.onmessage = (ev) => {
@@ -50,7 +56,6 @@ export default function CameraPanel() {
           try {
             const msg = JSON.parse(ev.data as string) as Record<string, unknown>
             if (msg.error === 'zenoh_unavailable') setS('zenoh_unavailable')
-            // keepalive messages: ignore
           } catch { /* ignore */ }
         }
       }
@@ -72,15 +77,17 @@ export default function CameraPanel() {
       wsRef.current?.close()
       if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current)
     }
-  }, [])
+  }, [mode]) // reconnect when mode changes
 
   return (
     <div style={{ position: 'relative', height: '100%', background: '#000', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <img
         ref={imgRef}
-        alt="Kamera-Feed"
+        alt="Feed"
         style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
       />
+
+      {/* Status indicator */}
       <div style={{
         position: 'absolute', top: 8, left: 8,
         background: 'rgba(0,0,0,0.65)', borderRadius: 4, padding: '3px 9px',
@@ -91,6 +98,27 @@ export default function CameraPanel() {
           background: STATUS_COLOR[status], display: 'inline-block', flexShrink: 0,
         }} />
         {STATUS_LABEL[status]}
+      </div>
+
+      {/* Mode toggle */}
+      <div style={{
+        position: 'absolute', top: 8, right: 8,
+        display: 'flex', gap: 2,
+      }}>
+        {(['camera', 'detection'] as Mode[]).map((m) => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            style={{
+              background: mode === m ? '#1565c0' : 'rgba(0,0,0,0.55)',
+              border: 'none', borderRadius: 3, color: mode === m ? '#fff' : '#aaa',
+              fontSize: 10, padding: '3px 7px', cursor: 'pointer',
+              fontWeight: mode === m ? 600 : 400,
+            }}
+          >
+            {m === 'camera' ? 'Kamera' : 'Detektor'}
+          </button>
+        ))}
       </div>
     </div>
   )
