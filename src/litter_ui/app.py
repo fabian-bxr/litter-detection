@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import litter_ui.zenoh_state as zenoh_state
@@ -44,6 +45,10 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["infra"])
     def health() -> dict:
         return {"status": "ok"}
+
+    @app.get("/", include_in_schema=False)
+    def _root() -> RedirectResponse:
+        return RedirectResponse(url="/ui/")
 
     ui_dist = _REPO_ROOT / "ui" / "dist"
     if ui_dist.exists():

@@ -57,12 +57,11 @@ the initial plan, in order:
 21. reduce the detection range to 1m
 22. increase range to 3m
 23. Commit the changes
-24. Can you add my prompts to you to the prompts/litter-agents.md and commit, also add the deb_lab_grid.png
 
-| Metric                              | Score                             |
-|-------------------------------------|-----------------------------------|
-| **Tool used**                       | Claude Code, Fable 5 Extra Effort |
-| **Error Rate (0 - 4)**              |                                   |
-| **Code Quality (0 - 4)**            |                                   |
-| **Discrepancy from Prompt (0 - 4)** |                                   |
-| **Notes**                           |                                   |
+| Metric                              | Score                                         |
+|-------------------------------------|-----------------------------------------------|
+| **Tool used**                       | Claude Code, Fable 5 Extra Effort             |
+| **Error Rate (0 - 4)**              | 3                                             |
+| **Code Quality (0 - 4)**            | 4                                             |
+| **Discrepancy from Prompt (0 - 4)** | 4                                             |
+| **Notes**                           | Good result, but resulting algorithm was poor |
