@@ -2,7 +2,7 @@
 train_yolo_mc.py — Multiklassen-Müll-DETECTION-Modell trainieren (Ansatz A).
 
 6 Material-Klassen (Plastik/Glas/Metall/Papier/Karton/Bio), Boxen statt Masken.
-Getrennt vom Masken-/Ein-Klassen-Modell (train_yolo.py). Basis: yolo11s.pt
+Getrennt vom Masken-/Ein-Klassen-Modell (train_yolo.py). Basis: yolov8s.pt
 (Detection, NICHT -seg).
 
 Start (erst auf Ansage):
@@ -20,7 +20,7 @@ os.environ.setdefault("MLFLOW_TRACKING_URI", f"sqlite:///{REPO_ROOT / 'mlflow.db
 os.environ.setdefault("MLFLOW_EXPERIMENT_NAME", "yolo-litter-mc")
 
 if __name__ == "__main__":
-    model = YOLO("yolo11s.pt")  # Detection (Boxen), nicht Segmentierung
+    model = YOLO("yolov8s.pt")  # Detection (Boxen), nicht Segmentierung
 
     model.train(
         data=str(REPO_ROOT / "dataset_mc.yaml"),
@@ -29,7 +29,7 @@ if __name__ == "__main__":
         imgsz=640,
         batch=16,
         project=str(REPO_ROOT / "runs" / "yolo"),
-        name="litter-yolo11s-mc-detect",
+        name="litter-yolov8s-mc-detect",
 
         pretrained=True,
         optimizer="AdamW",

@@ -94,7 +94,7 @@ Datensatz (`data/yolo_mc`, `dataset_mc.yaml`) und Trainer:
   Video-Frames werden **strided** gedeckelt (Anti-Leakage).
 - `balance_mc.py` — die stark überrepräsentierte **bio**-Klasse wird gedeckelt
   (nur Studio-Bilder ausgedünnt, Echtwelt bleibt).
-- `train_yolo_mc.py` — `yolo11s.pt` (Detection, nicht -seg), 6 Klassen.
+- `train_yolo_mc.py` — `yolov8s.pt` (Detection, nicht -seg), 6 Klassen.
 
 **Fazit:** Die Schuh-FPs lassen sich empirisch **am direktesten über Hard
 Negatives im Ein-Klassen-Modell** lösen, nicht über den Multiklassen-Umweg.
@@ -104,7 +104,7 @@ Das Multiklassen-Modell bleibt daher ein eigenständiges Experiment und ist
 ## Test-Ergebnisse
 
 ### Ein-Klassen-Seg — Neutraining auf erweitertem Datensatz
-(yolo11s-seg @ 960, 30 ep, **5335 train / 927 val**, Val-Metriken `best.pt`)
+(yolov8s-seg @ 960, 30 ep, **5335 train / 927 val**, Val-Metriken `best.pt`)
 
 | Metrik | Box | Mask |
 |--------|-----|------|
@@ -122,13 +122,12 @@ in den Daten, nicht im Modell-/Hyperparameter-Tuning.
 | Lauf | mAP50 | Recall | mAP50-95 | Anmerkung |
 |------|-------|--------|----------|-----------|
 | yolov8s@640 (Baseline) | 0.433 | 0.41 | 0.271 | — |
-| yolo11s@640 (30 ep) | 0.434 | 0.395 | 0.270 | = Baseline |
-| yolo11s@768 + copy_paste | 0.437 | 0.401 | 0.277 | bester Subset-Lauf |
 
-→ Alle Modell-/Trainings-Hebel pendelten um mAP50 ~0.44 = **Datendecke** des Subsets.
+→ Auf dem Subset pendelten alle Modell-/Trainings-Hebel um mAP50 ~0.44 =
+**Datendecke** des Subsets.
 
 ### Multiklassen-Detection (Ansatz A)
-(yolo11s @ 640, 30 ep, **9394 train / 3727 val**, 24 869 Instanzen)
+(yolov8s @ 640, 30 ep, **9394 train / 3727 val**, 24 869 Instanzen)
 
 | Klasse | mAP50 | Recall | mAP50-95 |
 |--------|-------|--------|----------|
@@ -158,13 +157,13 @@ in den Daten, nicht im Modell-/Hyperparameter-Tuning.
   `n_observations` akkumuliert, Boxen/Flächen korrekt.
 
 ### Performance
-- Inferenz **~30 ms/Frame** auf der RTX 5070 Ti (yolo11s @ 1280).
+- Inferenz **~30 ms/Frame** auf der RTX 5070 Ti (yolov8s-seg @ 1280).
 
 ## Konfiguration (Env-Vars)
 
 | Variable | Default | Wirkung |
 |----------|---------|---------|
-| `MLFLOW_MODEL_URI` | `models/best_yolo11s_seg.pt` | aktives Modell (`.pt` = YOLO; `models:/…` = U-Net-Fallback) |
+| `MLFLOW_MODEL_URI` | `models/best_yolov8s_seg.pt` | aktives Modell (`.pt` = YOLO; `models:/…` = U-Net-Fallback) |
 | `YOLO_IMGSZ` | `1280` | Inferenz-Auflösung |
 | `YOLO_CONF` | `0.25` | Confidence-Schwelle (niedriger = mehr Recall, höher = weniger Fehlalarme) |
 | `YOLO_MIN_AREA` | `0.0005` | Min. Maskenfläche als Bildanteil; verwirft winzige Speck-Fehlalarme (0 = aus) |
@@ -198,10 +197,10 @@ uv run python auto-research/ingest_plastopol_seg.py
 uv run python auto-research/fetch_shoe_negatives.py --max 400
 # optional: uv run python auto-research/merge_roboflow.py --src <pfad>
 
-# 2) Training (yolo11s-seg @ 960, batch 16, 30 ep — Config in train_yolo.py)
+# 2) Training (yolov8s-seg @ 960, batch 16, 30 ep — Config in train_yolo.py)
 uv run python auto-research/train_yolo.py
 
-# 3) Live-Detector (nutzt models/best_yolo11s_seg.pt als Default)
+# 3) Live-Detector (nutzt models/best_yolov8s_seg.pt als Default)
 uv run detector
 
 # Noch weniger Fehlalarme (Recall ↔ Precision)
@@ -214,14 +213,12 @@ uv run python auto-research/prepare_yolo_mc.py
 uv run python auto-research/ingest_realworld_mc.py
 uv run python auto-research/ingest_zerowaste_mc.py --max-train 1500 --max-val 300
 uv run python auto-research/balance_mc.py --target 7000
-uv run python auto-research/train_yolo_mc.py   # → runs/yolo/litter-yolo11s-mc-detect-*/
+uv run python auto-research/train_yolo_mc.py   # → runs/yolo/litter-yolov8s-mc-detect-*/
 ```
 
 ## Modelle (`models/`)
 
 | Datei | Modell | Status |
 |-------|--------|--------|
-| `best_yolo11s_seg.pt` | yolo11s-seg @ 960 (erweiterter Datensatz) | **Default (aktiv)** |
-| `best_yolo11s_seg.prev.pt` / `.prev2.pt` | frühere Seg-Stände | Backup/Rollback |
-| `best_yolov8s_seg.pt` | yolov8s-seg @ 640 | Baseline (Vergleich) |
-| (Multiklasse) | yolo11s @ 640, 6 Klassen | nur in `runs/yolo/litter-yolo11s-mc-detect-*/weights/best.pt`, nicht im Detector |
+| `best_yolov8s_seg.pt` | yolov8s-seg @ 960 (erweiterter Datensatz) | **Default (aktiv)** |
+| (Multiklasse) | yolov8s @ 640, 6 Klassen | nur in `runs/yolo/litter-yolov8s-mc-detect-*/weights/best.pt`, nicht im Detector |

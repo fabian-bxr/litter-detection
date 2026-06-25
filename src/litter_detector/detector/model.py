@@ -15,7 +15,7 @@ _MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 _STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_MODEL_URI = str(REPO_ROOT / "models" / "best_yolo11s_seg.pt")
+DEFAULT_MODEL_URI = str(REPO_ROOT / "models" / "best_yolov8s_seg.pt")
 _MLFLOW_SCHEMES = ("models:/", "runs:/", "mlflow://")
 # Confidence threshold: higher = fewer false positives (precision over recall).
 _YOLO_CONF = float(os.environ.get("YOLO_CONF", "0.25"))

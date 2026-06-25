@@ -1,6 +1,6 @@
 ### Prompt 1:
 Das YOLO-Modell soll robuster werden und mehrere Modell-Varianten unterstützen.
-- Baue eine Modell-Registry (`detector/registry.py`), über die verschiedene Checkpoints (`best_yolo11s_seg.pt`, `best_yolov8s_seg.pt`) konfigurierbar geladen werden können.
+- Baue eine Modell-Registry (`detector/registry.py`), über die verschiedene Checkpoints (`best_yolov8s_seg.pt`) konfigurierbar geladen werden können.
 - Erweitere die Trainingsdaten über TACO hinaus (zusätzliche Waste-Datasets von HuggingFace/Roboflow ingestieren und mergen).
 - Stelle Kompatibilität sicher: `model.py` und `main.py` so anpassen, dass der Detector mit beiden Modellvarianten läuft.
 

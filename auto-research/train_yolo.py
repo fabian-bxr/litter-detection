@@ -9,7 +9,7 @@ os.environ.setdefault("MLFLOW_TRACKING_URI", f"sqlite:///{REPO_ROOT / 'mlflow.db
 os.environ.setdefault("MLFLOW_EXPERIMENT_NAME", "yolo-litter")
 
 if __name__ == "__main__":
-    model = YOLO("yolo11s-seg.pt")
+    model = YOLO("yolov8s-seg.pt")
 
     model.train(
         data=str(REPO_ROOT / "dataset.yaml"),
@@ -18,7 +18,7 @@ if __name__ == "__main__":
         imgsz=960,
         batch=16,
         project=str(REPO_ROOT / "runs" / "yolo"),
-        name="litter-yolo11s-seg-fp-tuned",
+        name="litter-yolov8s-seg-fp-tuned",
 
         pretrained=True,
         optimizer="AdamW",
