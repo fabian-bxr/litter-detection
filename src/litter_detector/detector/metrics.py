@@ -42,6 +42,26 @@ class DetectorMetrics:
             description="Fraction of pixels classified as litter",
             unit="ratio",
         )
+        self.detections_per_frame = meter.create_histogram(
+            "detector.tracker.detections_per_frame",
+            description="Connected-component detections extracted from the mask each frame",
+            unit="objects",
+        )
+        self.confirmed_tracks_per_frame = meter.create_histogram(
+            "detector.tracker.confirmed_tracks_per_frame",
+            description="Confirmed tracked objects emitted each frame",
+            unit="objects",
+        )
+        self.tracker_active_tracks = meter.create_histogram(
+            "detector.tracker.active_tracks",
+            description="Total live tracks (incl. tentative + coasting) after each frame",
+            unit="objects",
+        )
+        self.tracker_unique_ids = meter.create_counter(
+            "detector.tracker.unique_ids_total",
+            description="Newly issued track IDs",
+            unit="ids",
+        )
 
 
 detector_metrics = DetectorMetrics()

@@ -1,4 +1,5 @@
-# First Lab KI-Systeme
+
+uv # First Lab KI-Systeme
 
 Over all task is to build a robot that can detect litter and notify its operator.
 
@@ -63,6 +64,25 @@ uv run detector --model models/best_efficientnetb4.onnx
 ```
 
 You can also set `LITTER_MODEL_URI` to make a choice sticky for the shell. ONNX inference runs on CPU by default; GPU ONNX requires installing `onnxruntime-gpu` with a CUDA version matching the torch wheels.
+
+### Object tracking
+
+The detector also runs a SORT-style multi-object tracker on top of the segmentation mask. Connected components extract per-object bounding boxes from the mask each frame, a Kalman filter predicts where each known object should appear next, and IoU-based Hungarian assignment links new detections to existing tracks. Confirmed tracks are persisted to a local SQLite registry (`runs/objects.db` by default) with first-seen / last-seen timestamps, and republished over Zenoh on `litter/tracked`. Bounding boxes plus IDs are also drawn on `litter/masked_frame`.
+
+Tunable via env vars (Pydantic Settings):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TRACKER_MIN_AREA_PX` | 50 | drop mask blobs below this many pixels (noise filter) |
+| `TRACKER_IOU_THRESHOLD` | 0.3 | minimum IoU for a (detection, prediction) match |
+| `TRACKER_MIN_HITS` | 3 | observations required before a track is emitted/persisted |
+| `TRACKER_MAX_AGE` | 30 | frames a track may go unmatched before it's killed |
+| `TRACKER_COUNT_MIN_OBSERVATIONS` | 10 | observations required before a track ticks the unique-objects counter (filters flickery blobs) |
+| `TRACKER_MASK_ERODE_KERNEL` | 3 | square erosion kernel applied to the mask before extraction; separates touching blobs into distinct tracks (set 0 to disable) |
+| `TRACKER_MIN_CONFIDENCE` | 0.6 | drop detections whose mean sigmoid prob (inside the blob) is below this value |
+| `REGISTRY_DB_PATH` | `runs/objects.db` | SQLite path for the persistent object registry |
+
+See [docs/tracking.md](docs/tracking.md) for the full architecture, lifecycle diagram, schema, and the multi-agent extension path.
 
 ### Distributing trained models
 
