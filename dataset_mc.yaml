@@ -1,0 +1,12 @@
+path: data/yolo_mc
+train: images/train
+val: images/val
+
+nc: 6
+names:
+  - plastik
+  - glas
+  - metall
+  - papier
+  - karton
+  - bio

@@ -104,14 +104,14 @@ Das Multiklassen-Modell bleibt daher ein eigenständiges Experiment und ist
 ## Test-Ergebnisse
 
 ### Ein-Klassen-Seg — Neutraining auf erweitertem Datensatz
-(yolov8s-seg @ 960, 30 ep, **5335 train / 927 val**, Val-Metriken `best.pt`)
+(yolov8s-seg @ 960, 30 ep, **5681 train / 981 val**, Val-Metriken `best.pt`)
 
 | Metrik | Box | Mask |
 |--------|-----|------|
-| Precision | 0.75 | 0.74 |
-| Recall | 0.60 | 0.57 |
-| mAP50 | **0.665** | 0.61 |
-| mAP50-95 | **0.447** | 0.36 |
+| Precision | 0.76 | 0.76 |
+| Recall | 0.60 | 0.56 |
+| mAP50 | **0.653** | 0.60 |
+| mAP50-95 | **0.432** | 0.34 |
 
 → Gegenüber dem alten TACO-Subset (mAP50 ~0.44, „Datendecke") ein klarer Sprung
 durch **mehr/domänennähere Daten + Hard Negatives** — der eigentliche Gewinn liegt
