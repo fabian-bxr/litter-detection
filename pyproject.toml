@@ -2,7 +2,7 @@
 name = "autoresearcher-litter-detection"
 version = "0.1.0"
 description = "Autonomous CNN training for litter segmentation"
-requires-python = ">=3.11"
+requires-python = "==3.11.*"
 dependencies = [
     "torch>=2.3.0",
     "torchvision>=0.18.0",
@@ -42,7 +42,8 @@ dependencies = [
     "pyyaml>=6.0",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
-    "ultralytics>=8.3.0",
+    "ultralytics>=8.4.38",
+    "lap>=0.5.12",
 ]
 
 [project.scripts]
@@ -58,6 +59,16 @@ markers = [
 ]
 
 [tool.uv]
+find-links = []
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
 
 [build-system]
 requires = ["hatchling"]
