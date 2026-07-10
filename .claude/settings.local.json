@@ -1,24 +1,17 @@
 {
   "permissions": {
     "allow": [
-      "Bash(uv sync *)",
+      "Bash(gh pr *)",
+      "Bash(git merge *)",
+      "Bash(git ls-tree *)",
+      "Bash(git checkout *)",
+      "Bash(git rm *)",
+      "Bash(timeout 300 uv lock)",
+      "Bash(git grep *)",
       "Bash(uv run *)",
-      "PowerShell(Start-Sleep -Seconds 1; Invoke-RestMethod -Uri \"http://localhost:8080/health\" | ConvertTo-Json; Invoke-RestMethod -Uri \"http://localhost:8080/api/missions\" | ConvertTo-Json; Invoke-RestMethod -Uri \"http://localhost:8080/api/map/config\" | ConvertTo-Json)",
-      "PowerShell(uv run *)",
-      "PowerShell(npm *)",
-      "Bash(npm --version)",
-      "PowerShell(winget *)",
-      "PowerShell(Get-ChildItem *)",
-      "PowerShell(npm create *)",
-      "PowerShell(npm install *)",
-      "PowerShell(Get-ChildItem -Recurse \"C:\\\\Users\\\\Dominik\\\\litter-detection\\\\ui\\\\src\" | Where-Object {!$_.PSIsContainer} | Select-Object FullName)",
-      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); Set-Location \"C:\\\\Users\\\\Dominik\\\\litter-detection\\\\ui\"; npx tsc --noEmit 2>&1)",
-      "PowerShell(npm run *)",
-      "PowerShell($r = Invoke-WebRequest \"http://localhost:8080/ui/\" -ErrorAction SilentlyContinue; \"Status: $\\($r.StatusCode\\), Content-Type: $\\($r.Headers['Content-Type']\\)\")",
-      "PowerShell(Invoke-RestMethod \"http://localhost:8080/api/map/config\" | ConvertTo-Json)",
-      "PowerShell($env:Path = [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"Machine\"\\) + \";\" + [System.Environment]::GetEnvironmentVariable\\(\"Path\",\"User\"\\); cd C:\\\\Users\\\\Dominik\\\\litter-detection; Start-Process -NoNewWindow -FilePath \"uv\" -ArgumentList \"run\",\"litter-ui\" -RedirectStandardOutput \"litter_ui_out.txt\" -RedirectStandardError \"litter_ui_err.txt\"; Start-Sleep 4; Get-Content litter_ui_err.txt | Select-Object -Last 5; Invoke-RestMethod \"http://localhost:8080/api/missions\" | ConvertTo-Json -Depth 3 | Select-Object -First 20)",
-      "PowerShell(Invoke-RestMethod \"http://localhost:8080/api/missions\" | ConvertTo-Json; Invoke-RestMethod \"http://localhost:8080/api/mission/stop\" -Method Post | ConvertTo-Json)",
-      "PowerShell(cd C:\\\\Users\\\\Dominik\\\\litter-detection; \\(Get-Item models\\\\best_yolo11s_seg.pt\\).Length / 1MB)"
+      "Bash(timeout 400 uv lock)",
+      "Bash(echo \"=== exit: $? ===\")",
+      "Bash(grep -nE \"^#{1,3} \" README.md)"
     ]
   }
 }

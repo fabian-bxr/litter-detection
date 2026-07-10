@@ -54,8 +54,6 @@ class Settings(BaseSettings):
     otel_endpoint: str = "http://localhost:4317"
     source: str = "webcam"
     id: int | None = None
-    # SQLite file for the tracked-object registry. Empty string disables it.
-    registry_db_path: str = "object_registry.db"
 
     # ── Detector postprocessing ─────────────────────────────────────────────
     detector_prob_threshold: float = 0.5
@@ -67,6 +65,7 @@ class Settings(BaseSettings):
     detector_morph_close_kernel: int = 5
 
     # ── Tracker ─────────────────────────────────────────────────────────────
+    # SQLite file for the tracked-object registry.
     registry_db_path: str = "runs/objects.db"
     tracker_min_area_px: int = 50
     # Tuned for handheld / Go2-mounted camera: while walking, bboxes jump
