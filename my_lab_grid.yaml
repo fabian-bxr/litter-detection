@@ -1,0 +1,12 @@
+%YAML 1.2
+---
+free_thresh: 0.196
+image: deb_lab_grid.png
+mode: trinary
+negate: 0
+occupied_thresh: 0.65
+origin:
+  - -9.600000381469727
+  - -12.69999980926514
+  - 0
+resolution: 0.05000000074505806

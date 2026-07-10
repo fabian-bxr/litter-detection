@@ -1,0 +1,36 @@
+### Prompt:
+We are currently working on training a machine learning model for litter detection on the TACO dataset: https://github.com/pedropro/TACO
+For this, we have already trained models using efficientnetb4 and ResNet34 as backbones, but model performance (val iou) is plateauing.
+What steps could we take to increase the model's performance? Possibly looking at smaller nets as our dataset is only around 1500 samples big.
+Research some possible directions to try out that could help us with our model's performance.
+
+**Follow-Up:** 
+- Update the @auto-research/program.md based on your suggested approaches, especially the recommendation on what to do first (smaller backbone, decoder and copy-paste augmentation) so my auto-research agent can start working on this
+- Rewrite the @auto-research/program.md to be a completely new training run. The first run should be a baseline run on the current resnet34 performance (use 20 epochs, as the default). Then start working on the improvements.
+
+| Metric                              | Score                  |
+|-------------------------------------|------------------------|
+| **Tool used**                       | Claude Code (Opus 4.6) |
+| **Error Rate (0 - 4)**              | 4                      |
+| **Code Quality (0 - 4)**            | 4                      |
+| **Discrepancy from Prompt (0 - 4)** | 4                      |
+| **Notes**                           | Started in Plan Mode   |
+
+### Prompt 2:
+The @program.md file should not be updated by the agents. After each training run, the train.py should be committed, with a short description of the run name and val_iou. To record the results (Run log), log the results to results.tsv (tab-separated, NOT comma-separated — commas break in descriptions). Also add if the approach was kept, discarded or if crashed. Also add the hash of the git commit hash (short, 7 characters)  to the results.tsv. Do not track the results.tsv with git.
+Your task is to update the @auto-research/program.md file with a section on how the logging should be done: Git commit -> log results.tsv with metrics and commit hash -> continue. Additionally, transfer the current Run log to the @auto-research/results.tsv file (leave git commit hash blank as they were not committed).
+
+**Follow-Up:**
+- Change the @auto-research/results.tsv to a markdown file as the .tsv file is not correctly rendered for me. Use a table to collect the information.
+- (Cleared chat) Read @auto-research/program.md and start the model training, do not stop.
+- Run the effv2s model with longer training again and report the results, read the @auto-research/program.md for this
+- When looking at the @auto-research/analysis.ipynb notebook, i can see that a lot of samples have 0 IoU when validating. When viewing the ones that have 0 IoU, there are a few of the masks that are also rotated or even incorrect, and other problematic areas are small objects. What can be done about this architecture wise and dataset wise?
+- Fix the EXIF Image Bug
+
+| Metric                              | Score                                                                                        |
+|-------------------------------------|----------------------------------------------------------------------------------------------|
+| **Tool used**                       | Claude Code (Opus 4.6)                                                                       |
+| **Error Rate (0 - 4)**              | 4                                                                                            |
+| **Code Quality (0 - 4)**            | 4                                                                                            |
+| **Discrepancy from Prompt (0 - 4)** | 4                                                                                            |
+| **Notes**                           | Started in Plan Mode, tsv file was either displayed incorrectly or had incorrect formatting. |

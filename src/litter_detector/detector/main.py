@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import threading
 import time
@@ -14,8 +15,15 @@ from loguru import logger
 from litter_detector.config import Settings
 from litter_detector.detector import model as model_mod
 from litter_detector.detector.metrics import SERVICE_NAME, detector_metrics, tracer
-from litter_detector.detector.registry import ObjectRegistry
+from litter_detector.stability import StabilityGate
 from litter_detector.telemetry import setup_telemetry, shutdown_telemetry
+from litter_detector.tracker import (
+    ByteTracker,
+    ObjectRegistry,
+    Track,
+    clean_mask,
+    mask_to_detections,
+)
 
 
 class LatestFrameSlot:
@@ -46,14 +54,15 @@ class LatestFrameSlot:
 
 class LitterDetector:
     @tracer.start_as_current_span("detector.init")
-    def __init__(self) -> None:
+    def __init__(self, model_uri: str) -> None:
         self.settings = Settings()
         self.session = zenoh.open(Settings.zenoh_config())
         self.topics = Settings.topics()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.model, model_uri = model_mod.load_model(self.device)
-        logger.info(f"Model loaded from {model_uri} on device={self.device}")
+        self.runner: model_mod.AnyRunner
+        self.runner, resolved_uri = model_mod.load_model(model_uri, self.device)
+        logger.info(f"Model loaded from {resolved_uri} on device={self.device}")
 
         self.frame_pub = self.session.declare_publisher(
             self.topics.detection.frame, encoding=zenoh.Encoding.IMAGE_JPEG
@@ -70,19 +79,29 @@ class LitterDetector:
         self.tracked_pub = self.session.declare_publisher(
             self.topics.detection.tracked, encoding=zenoh.Encoding.APPLICATION_JSON
         )
-        # id -> {first_seen_ns, last_seen_ns, n} bookkeeping for tracked output.
-        self._track_reg: dict[int, dict] = {}
-        # Optional SQLite persistence of tracks (empty path disables it).
-        self.registry = (
-            ObjectRegistry(self.settings.registry_db_path)
-            if self.settings.registry_db_path
-            else None
+
+        self.tracker = ByteTracker(
+            iou_threshold=self.settings.tracker_iou_threshold,
+            iou_threshold_low=self.settings.tracker_iou_threshold_low,
+            det_high_thresh=self.settings.tracker_det_high_thresh,
+            max_age=self.settings.tracker_max_age,
+            min_hits=self.settings.tracker_min_hits,
+            appearance_weight=self.settings.tracker_appearance_weight,
+            appearance_alpha=self.settings.tracker_appearance_alpha,
         )
-        if self.registry is not None:
-            logger.info(f"Track registry: {self.settings.registry_db_path}")
+        self.registry = ObjectRegistry(self.settings.registry_db_path)
+        self._confirmed_ids: set[int] = set()
+
+        self.stability = StabilityGate(
+            session=self.session,
+            topic=self.settings.stability_imu_topic,
+            max_angular_velocity=self.settings.stability_max_angular_velocity,
+        )
 
         self.slot = LatestFrameSlot()
         self._drop_count = 0
+        # Rolling EWMA state for temporal smoothing of probability maps.
+        self._prev_probs: np.ndarray | None = None
         self.subscriber = self.session.declare_subscriber(
             self.topics.camera.frame, self._on_frame
         )
@@ -104,6 +123,14 @@ class LitterDetector:
             queue_age_ms = (time.perf_counter_ns() - enqueued_at_ns) / 1e6
             span.set_attribute("frame.queue_age_ms", queue_age_ms)
 
+            # Skip frames captured while the robot is shaking too much for the
+            # model to be useful. Fail-open if the IMU stream is dead.
+            if not self.stability.is_stable():
+                span.set_attribute("stability.skipped", True)
+                span.set_attribute("stability.angular_velocity", self.stability.latest_magnitude)
+                detector_metrics.frames_dropped.add(1)
+                return
+
             with tracer.start_as_current_span("decode"):
                 arr = np.frombuffer(payload, dtype=np.uint8)
                 frame_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -111,24 +138,73 @@ class LitterDetector:
                     logger.error("Failed to decode JPEG frame")
                     return
 
-            with tracer.start_as_current_span("preprocess"):
-                tensor = model_mod.preprocess(frame_bgr, self.device)
+            h, w = frame_bgr.shape[:2]
 
             with tracer.start_as_current_span("inference"):
                 inf_start = time.perf_counter()
-                with torch.inference_mode():
-                    logits = self.model(tensor)
+                if isinstance(self.runner, model_mod.YoloRunner):
+                    # YOLO handles its own preprocessing internally; returns
+                    # (mask_uint8, probs_float) at full frame resolution.
+                    mask, probs = self.runner.infer_frame(
+                        frame_bgr, self.settings.detector_prob_threshold
+                    )
+                else:
+                    tensor = model_mod.preprocess(frame_bgr, self.device)
+                    logits = self.runner.infer(tensor)
+                    probs = model_mod.probs_from_logits(logits, (h, w))
+                    # Temporal EWMA smooths flicker from a shaking camera.
+                    alpha = self.settings.detector_temporal_alpha
+                    if alpha > 0.0 and self._prev_probs is not None and self._prev_probs.shape == probs.shape:
+                        probs = (alpha * self._prev_probs + (1.0 - alpha) * probs).astype(np.float32)
+                    self._prev_probs = probs
+                    mask = model_mod.binarize(probs, self.settings.detector_prob_threshold)
                 inf_ms = (time.perf_counter() - inf_start) * 1000
                 detector_metrics.inference_time_ms.record(inf_ms)
                 span.set_attribute("inference.time_ms", inf_ms)
 
             with tracer.start_as_current_span("postprocess"):
-                h, w = frame_bgr.shape[:2]
-                mask = model_mod.postprocess(logits, (h, w))
+                mask = model_mod.morph_close(mask, self.settings.detector_morph_close_kernel)
                 overlay_img = model_mod.overlay(frame_bgr, mask)
                 coverage = float((mask > 0).mean())
                 detector_metrics.mask_coverage_ratio.record(coverage)
                 span.set_attribute("mask.coverage_ratio", coverage)
+
+            frame_ts_ns = time.time_ns()
+            with tracer.start_as_current_span("track"):
+                cleaned = clean_mask(
+                    mask, erode_kernel=self.settings.tracker_mask_erode_kernel
+                )
+                detections = mask_to_detections(
+                    cleaned,
+                    min_area_px=self.settings.tracker_min_area_px,
+                    probs=probs,
+                    min_confidence=self.settings.tracker_min_confidence,
+                    # Only pay the histogram cost when the tracker will use it.
+                    frame_bgr=frame_bgr if self.settings.tracker_appearance_weight > 0.0 else None,
+                )
+                tracks = self.tracker.update(detections, frame_ts_ns)
+                self.registry.upsert_all(tracks)
+                _draw_tracks(overlay_img, tracks)
+
+                detector_metrics.detections_per_frame.record(len(detections))
+                detector_metrics.confirmed_tracks_per_frame.record(len(tracks))
+                detector_metrics.tracker_active_tracks.record(self.tracker.active_track_count)
+                # Count an ID exactly once — the first frame it crosses the
+                # `tracker_count_min_observations` bar. This sits on top of the
+                # tracker's own `min_hits` gate: SORT confirms after `min_hits`
+                # consecutive matches, but the unique-objects counter only
+                # ticks once the track has been observed enough times to be
+                # considered a real, persistent object (not a flickery blob).
+                threshold = self.settings.tracker_count_min_observations
+                newly_counted = [
+                    t for t in tracks
+                    if t.id not in self._confirmed_ids and t.n_observations >= threshold
+                ]
+                if newly_counted:
+                    self._confirmed_ids.update(t.id for t in newly_counted)
+                    detector_metrics.tracker_unique_ids.add(len(newly_counted))
+                span.set_attribute("tracker.detections", len(detections))
+                span.set_attribute("tracker.confirmed_tracks", len(tracks))
 
             with tracer.start_as_current_span("publish"):
                 ok_mask, mask_jpeg = cv2.imencode(".jpg", mask)
@@ -136,69 +212,29 @@ class LitterDetector:
                 if not (ok_mask and ok_overlay):
                     logger.error("Failed to JPEG-encode mask or overlay")
                     return
-                self.frame_pub.put(payload)
+                # timestamp_ns attachment lets downstream consumers pair this
+                # frame exactly with the tracked-objects message of the same
+                # loop iteration (existing consumers ignore attachments).
+                self.frame_pub.put(payload, attachment=str(frame_ts_ns).encode())
                 self.mask_pub.put(mask_jpeg.tobytes())
                 self.masked_pub.put(overlay_jpeg.tobytes())
-                now_ns = time.time_ns()
                 self.detections_pub.put(
                     json.dumps({
-                        "timestamp_ns": now_ns,
+                        "timestamp_ns": frame_ts_ns,
                         "mask_coverage_ratio": coverage,
                         "inference_ms": inf_ms,
                     })
                 )
-                raw_tracks = (
-                    self.model.last_tracks()
-                    if hasattr(self.model, "last_tracks")
-                    else []
-                )
-                tracks = self._build_tracked(raw_tracks, (h, w), now_ns)
-                span.set_attribute("tracks.count", len(tracks))
                 self.tracked_pub.put(
-                    json.dumps({"timestamp_ns": now_ns, "tracks": tracks})
+                    json.dumps({
+                        "timestamp_ns": frame_ts_ns,
+                        "tracks": [t.to_dict() for t in tracks],
+                    })
                 )
-                if self.registry is not None:
-                    self.registry.upsert_all(tracks)
 
             total_ms = (time.perf_counter() - t_start) * 1000
             detector_metrics.end_to_end_time_ms.record(total_ms)
             detector_metrics.frames_processed.add(1)
-
-    def _build_tracked(
-        self, raw_tracks: list[dict], frame_hw: tuple[int, int], now_ns: int
-    ) -> list[dict]:
-        """Scale normalized YOLO tracks to pixel space and attach per-id
-        first_seen/last_seen/n_observations bookkeeping, matching the
-        litter-agent-V1 TrackMsg schema."""
-        fh, fw = frame_hw
-        frame_area = float(fw * fh)
-        out: list[dict] = []
-        for t in raw_tracks:
-            tid = int(t["id"])
-            reg = self._track_reg.get(tid)
-            if reg is None:
-                reg = {"first_seen_ns": now_ns, "n": 0}
-                self._track_reg[tid] = reg
-            reg["n"] += 1
-            reg["last_seen_ns"] = now_ns
-            x, y, bw, bh = t["bbox_norm"]
-            out.append({
-                "id": tid,
-                "bbox": [
-                    int(round(x * fw)), int(round(y * fh)),
-                    int(round(bw * fw)), int(round(bh * fh)),
-                ],
-                "area_px": int(round(t["area_frac"] * frame_area)),
-                "first_seen_ns": reg["first_seen_ns"],
-                "last_seen_ns": now_ns,
-                "n_observations": reg["n"],
-            })
-        # Drop registry entries not seen for >5 s to bound memory.
-        cutoff = now_ns - 5_000_000_000
-        self._track_reg = {
-            i: r for i, r in self._track_reg.items() if r["last_seen_ns"] >= cutoff
-        }
-        return out
 
     def run(self) -> None:
         logger.info("Detector running — waiting for frames")
@@ -223,16 +259,39 @@ class LitterDetector:
         self.masked_pub.undeclare()
         self.detections_pub.undeclare()
         self.tracked_pub.undeclare()
-        if self.registry is not None:
-            self.registry.close()
+        self.stability.close()
         self.session.close()
+        self.registry.close()
+
+
+def _draw_tracks(image: np.ndarray, tracks: list[Track]) -> None:
+    """Annotate an image in-place with bbox + track ID for each confirmed track."""
+    for t in tracks:
+        x, y, w, h = t.bbox.x, t.bbox.y, t.bbox.w, t.bbox.h
+        cv2.rectangle(image, (x, y), (x + w, y + h), (0, 255, 0), 2)
+        label = f"#{t.id}"
+        cv2.putText(image, label, (x, max(0, y - 6)), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6, (0, 255, 0), 2, cv2.LINE_AA)
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Litter segmentation detector")
+    parser.add_argument(
+        "--model",
+        default=model_mod.resolve_default_uri(),
+        help=(
+            "Model source: MLflow URI ('models:/name/version', 'runs:/<id>/model'), "
+            "a local .onnx file (U-Net), or a local .pt file (YOLO11-seg via ultralytics). "
+            "Defaults to LITTER_MODEL_URI / MLFLOW_MODEL_URI env vars, "
+            f"then {model_mod.DEFAULT_MODEL_URI!r}."
+        ),
+    )
+    args = parser.parse_args()
+
     setup_telemetry(SERVICE_NAME)
     detector: LitterDetector | None = None
     try:
-        detector = LitterDetector()
+        detector = LitterDetector(model_uri=args.model)
         detector.run()
     finally:
         if detector is not None:
