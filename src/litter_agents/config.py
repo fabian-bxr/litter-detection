@@ -1,12 +1,25 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Literal
 
 import zenoh
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from litter_detector.config import TOPICS, Topics
+
+_REPO_ROOT = Path(__file__).parents[2]  # src/litter_agents -> src -> repo root
+
+
+def repo_path(path: str | Path) -> Path:
+    """Resolve a settings path: relative ones hang off the repo root, not the CWD.
+
+    Entry points get launched from wherever the user happens to be standing; a
+    path that silently means something different per CWD is a footgun.
+    """
+    p = Path(path)
+    return p if p.is_absolute() else _REPO_ROOT / p
 
 # Topics owned by the robodog-digipro stack. Kept as plain constants (not
 # settings) because they are wire contracts fixed by that project — see
@@ -27,13 +40,26 @@ def build_zenoh_config() -> zenoh.Config:
 
 
 class AgentSettings(BaseSettings):
-    # Load secrets/overrides from a .env file at the repo root. Real environment
-    # variables still take precedence over .env values.
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Load secrets/overrides from the .env file at the repo root. Real environment
+    # variables still take precedence over .env values. The path is absolute on
+    # purpose: a bare ".env" is resolved against the CWD, so launching from
+    # anywhere but the repo root would silently drop MAP_SOURCE, OLLAMA_API_KEY
+    # and friends back to their defaults.
+    model_config = SettingsConfigDict(env_file=_REPO_ROOT / ".env", extra="ignore")
 
     # ── Static map ──────────────────────────────────────────────────────────
     map_yaml_path: str = "my_lab_grid.yaml"
-    map_source: Literal["file", "zenoh"] = "file"
+    map_source: Literal["file", "zenoh", "mola"] = "file"
+    # MOLA SLAM control API (robodog-digipro mola_docker) — serves the static
+    # map's build-grid costmap (PNG + map_server YAML) over REST on :8088.
+    mola_api_url: str = "http://localhost:8088"
+    mola_map_session: str = ""  # empty → the most recently modified session
+    mola_build_grid: bool = False  # POST build-grid if the costmap isn't ready
+    # build-grid projection window (metres, map frame): keep floor + obstacles
+    # up to head height, drop the ceiling.
+    mola_grid_floor_z: float = 0.0
+    mola_grid_min_h: float = 0.1
+    mola_grid_max_h: float = 1.5
 
     # ── Robot & camera geometry ─────────────────────────────────────────────
     robot_radius_m: float = 0.25  # Go2 half-width ~0.16 m + margin
@@ -122,6 +148,14 @@ class AgentSettings(BaseSettings):
     llm_retry_backoff_s: float = 5.0
     findings_db_path: str = "runs/findings.db"
     findings_dir: str = "runs/missions"
+
+    # ── MLflow tracing ──────────────────────────────────────────────────────
+    # Autolog each pydantic-ai agent call (prompt, response, tokens, retries,
+    # parsed output) as an MLflow trace. Empty URI → the repo-root mlflow.db
+    # that training also writes to.
+    mlflow_tracing: bool = True
+    mlflow_tracking_uri: str = ""
+    mlflow_experiment: str = "litter-agents"
 
     # ── LLM / Ollama Cloud ──────────────────────────────────────────────────
     ollama_base_url: str = "https://ollama.com/v1"

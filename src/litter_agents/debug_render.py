@@ -107,3 +107,62 @@ class TrajectoryRenderer:
         if name is None:
             self._n_frames += 1
         return path
+
+
+# ── Live UI overlay ───────────────────────────────────────────────────────────
+
+# Translucent BGRA fills for the map overlay the web UI paints on top of the
+# static map image. Same idea as TrajectoryRenderer's tints, but rendered as a
+# transparent RGBA layer (robot/path/pose are drawn as vector layers in the
+# browser, so only the area masks live here).
+_SEEN_BGRA = (120, 211, 52, 130)       # green   — camera has observed this
+_REMAINING_BGRA = (255, 132, 56, 105)  # blue    — reachable target, still unseen
+_OBSTACLE_BGRA = (68, 68, 239, 175)    # red     — discovered dynamic obstacle
+_OUTLINE_BGR = (238, 211, 34)          # cyan    — requested search-area boundary
+
+
+def _paint(bgra: np.ndarray, mask: np.ndarray, colour: tuple[int, int, int, int]) -> None:
+    if mask.any():
+        bgra[mask] = colour
+
+
+def render_coverage_overlay(
+    grid: GridMap,
+    target: np.ndarray,
+    seen: np.ndarray,
+    denominator: np.ndarray,
+    obstacles: np.ndarray | None = None,
+) -> bytes:
+    """A world-aligned translucent RGBA PNG of the current exploration state.
+
+    Mirrors the ``runs/`` debug frames — green where the camera has swept,
+    blue for the reachable-but-unseen remainder, red for discovered obstacles,
+    a cyan outline for the requested area — but as a transparent overlay the UI
+    stacks on the static map image. The array is flipped to map_server
+    orientation (row 0 = max y) so it lines up pixel-for-pixel with the map PNG
+    Leaflet already renders. Returns encoded PNG bytes.
+    """
+    bgra = np.zeros((grid.height, grid.width, 4), dtype=np.uint8)
+    _paint(bgra, denominator & ~seen, _REMAINING_BGRA)
+    _paint(bgra, seen, _SEEN_BGRA)
+    if obstacles is not None:
+        _paint(bgra, obstacles, _OBSTACLE_BGRA)
+
+    # Alpha-bleed: let the fill colours seep one step into their transparent
+    # neighbours so the browser's bilinear upscaling doesn't blend the edges
+    # toward black (RGB stays coloured; alpha stays 0, so nothing new shows).
+    transparent = bgra[..., 3] == 0
+    if transparent.any() and not transparent.all():
+        bled = cv2.dilate(bgra[..., :3], np.ones((3, 3), np.uint8), iterations=2)
+        bgra[..., :3][transparent] = bled[transparent]
+
+    contours, _ = cv2.findContours(
+        target.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    cv2.drawContours(bgra, contours, -1, (*_OUTLINE_BGR, 235), 2)
+
+    bgra = np.flipud(bgra)  # match the map PNG (top row = max y)
+    ok, buf = cv2.imencode(".png", bgra)
+    if not ok:  # pragma: no cover — cv2 PNG encode does not realistically fail
+        raise RuntimeError("failed to encode coverage overlay PNG")
+    return buf.tobytes()

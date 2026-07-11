@@ -21,12 +21,27 @@ from litter_detector.telemetry import setup_telemetry
 
 from litter_agents.interfaces.mission import MissionReport, SearchAreaSpec
 from litter_agents.mission.orchestrator import MissionController
+from litter_agents.tracing import setup_mlflow_tracing
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("prompt", help="natural-language search request")
-    p.add_argument("--map", default=None, help="map_server YAML (default: settings)")
+    p.add_argument("--map", default=None,
+                   help="map_server YAML file (implies --map-source file; "
+                   "default: settings)")
+    p.add_argument(
+        "--map-source", choices=("file", "mola"), default=None,
+        help="where to load the static map from: 'file' (map_server YAML) or "
+        "'mola' (robodog MOLA SLAM control API) (default: settings)",
+    )
+    p.add_argument("--mola-url", default=None, metavar="URL",
+                   help="MOLA control API base URL (default: settings, "
+                   "http://localhost:8088)")
+    p.add_argument("--mola-session", default=None, metavar="NAME",
+                   help="MOLA map session to load (default: most recent)")
+    p.add_argument("--mola-build-grid", action="store_true",
+                   help="build the 2D costmap via the MOLA API if it isn't ready")
     p.add_argument(
         "--robot-radius", type=float, default=None,
         help="override robot_radius_m (config-space inflation); never go below "
@@ -115,17 +130,25 @@ def main() -> None:
         "candidate_max_dist_m": args.max_dist,
         "enable_frontier_fallback": args.frontier,
         "planner_mode": args.planner,
+        "map_source": args.map_source,
+        "mola_api_url": args.mola_url,
+        "mola_map_session": args.mola_session,
     }
     overrides = {k: v for k, v in overrides.items() if v is not None}
+    # A YAML path implies the file provider unless the source was set explicitly.
+    if args.map:
+        overrides["map_yaml_path"] = args.map
+        overrides.setdefault("map_source", "file")
+    if args.mola_build_grid:
+        overrides["mola_build_grid"] = True
     if overrides:
         settings = settings.model_copy(update=overrides)
 
-    map_provider = None
-    if args.map:
-        from litter_agents.mapping.provider import FileMapProvider
+    setup_mlflow_tracing(settings)
 
-        map_provider = FileMapProvider(args.map)
-    controller = MissionController(settings, map_provider=map_provider)
+    # MissionController builds the provider from settings.map_source (see
+    # litter_agents.mapping.provider.build_map_provider).
+    controller = MissionController(settings)
 
     try:
         report = asyncio.run(

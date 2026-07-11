@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 interface Props {
+  onMissionStart?: (missionId: string) => void
   onMissionComplete?: () => void
 }
 
@@ -10,6 +11,12 @@ interface StatusResponse {
   log_tail: string[]
 }
 
+interface StartResponse {
+  status: string
+  sim: boolean
+  mission_id: string
+}
+
 function logColor(line: string): string {
   if (line.includes('ERROR') || line.includes('Fehler')) return '#f44336'
   if (line.includes('WARNING')) return '#ff9800'
@@ -17,7 +24,7 @@ function logColor(line: string): string {
   return '#aaa'
 }
 
-export default function ChatPanel({ onMissionComplete }: Props) {
+export default function ChatPanel({ onMissionStart, onMissionComplete }: Props) {
   type MissionMode = 'sim' | 'camtest' | 'real'
   const [prompt, setPrompt] = useState('')
   const [circleRadius, setCircleRadius] = useState<number | ''>(5)
@@ -35,7 +42,12 @@ export default function ChatPanel({ onMissionComplete }: Props) {
       .then((data) => {
         setIsRunning(data.running)
         if (data.log_tail.length > 0) setLogLines(data.log_tail)
-        if (data.running) connectSSE()
+        if (data.running) {
+          // Reloaded mid-run: adopt the mission already in flight so the board
+          // shows *its* findings rather than the previously selected mission's.
+          if (data.mission_id) onMissionStart?.(data.mission_id)
+          connectSSE()
+        }
       })
       .catch(console.error)
 
@@ -96,7 +108,9 @@ export default function ChatPanel({ onMissionComplete }: Props) {
     })
 
     if (res.ok) {
+      const data = (await res.json()) as StartResponse
       setIsRunning(true)
+      onMissionStart?.(data.mission_id)  // open the new, empty board
       connectSSE()
     } else {
       const data = await res.json().catch(() => ({}))

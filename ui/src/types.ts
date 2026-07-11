@@ -44,11 +44,18 @@ export interface MapConfig {
   height_px: number | null
 }
 
+export interface CoverageStats {
+  fraction: number
+  reachable_m2: number
+}
+
 export interface StateMessage {
   pose: Pose2D | null
   path_history: [number, number][]
   planned_path: [number, number][]
   nav_status: Record<string, unknown> | null
+  overlay_seq?: number
+  coverage?: CoverageStats | null
   error?: string
   keepalive?: boolean
 }

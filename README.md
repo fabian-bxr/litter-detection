@@ -149,6 +149,17 @@ The LLM calls need `OLLAMA_API_KEY` (Ollama Cloud, OpenAI-compatible endpoint
 `https://ollama.com/v1`); model names are configurable via `AgentSettings` in
 `src/litter_agents/config.py`.
 
+**Map source** — the static map is loaded through a `MapProvider` (`map_source`
+setting). The default (`file`) reads a local `map_server` YAML+PNG. To pull the
+live map straight from the robodog-digipro MOLA SLAM control API instead, use
+`--map-source mola` (auto-selects the newest mapping session; `--mola-build-grid`
+builds the 2D costmap on demand):
+
+```bash
+uv run litter-mission "Search around me" --map-source mola --mola-build-grid
+uv run litter-mission "Search around me" --map-source mola --mola-session hall-b_2026-07
+```
+
 **Offline exploration sim** — runs the identical exploration loop against the static map
 with fake nav/pose, so no robot, zenoh or LLM is needed. Renders frames to `runs/sim/`:
 
@@ -161,8 +172,10 @@ uv run litter-sim --circle 5 --block -10.7 -0.3 0.5   # simulate an unmapped obs
 
 A dashboard for browsing findings, the map and mission status:
 
+![Agent UI dashboard — live camera with tracked detections, coverage map and mission log, validated findings](docs/images/agent-ui.png)
+
 ```bash
-uv run litter-ui   # FastAPI backend + WebSocket on http://localhost:8080
+uv run litter-ui   # FastAPI backend + WebSocket on http://localhost:8090
 ```
 
 The backend (`src/litter_ui/`) exposes REST + WebSocket endpoints and serves the built
@@ -170,6 +183,14 @@ React frontend (`ui/`) at `/ui/` when `ui/dist` exists. To develop the frontend:
 
 ```bash
 cd ui && npm install && npm run dev
+```
+
+The map shown in the UI honours the same `map_source` setting as missions. By default
+it renders the local `my_lab_grid.yaml`; to display the live map for the session the
+robot is currently localizing on, run with `MAP_SOURCE=mola`:
+
+```bash
+MAP_SOURCE=mola uv run litter-ui
 ```
 
 ### Run Grafana OTel LGTM

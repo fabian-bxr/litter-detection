@@ -13,13 +13,14 @@ from loguru import logger
 from pydantic import BaseModel
 
 from litter_agents.agents.validator import build_validation_agent, make_validate_fn
-from litter_agents.config import AgentSettings
+from litter_agents.config import AgentSettings, repo_path
+from litter_agents.debug_render import render_coverage_overlay
 from litter_agents.hunter.explore import explore
 from litter_agents.hunter.params import HunterParams
 from litter_agents.hunter.planner import ExplorationPlanner
 from litter_agents.interfaces.mission import SearchAreaSpec
 from litter_agents.interfaces.robodog import Pose2D
-from litter_agents.mapping.provider import FileMapProvider
+from litter_agents.mapping.provider import build_map_provider
 from litter_agents.mapping.raster import rasterize_area
 from litter_agents.mission.orchestrator import MissionController
 from litter_agents.sim.fake_nav import FakeNav, FakePoseSource
@@ -86,23 +87,63 @@ def _remove_sink() -> None:
         _sink_id = None
 
 
+def _new_mission_id(body: "StartBody") -> str:
+    """Mint the id up front so the UI can show an empty board from tick zero."""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    if body.detection_test:
+        return f"{stamp}-camtest-{uuid.uuid4().hex[:4]}"
+    if body.sim_mode:
+        return f"{stamp}-sim-{uuid.uuid4().hex[:4]}"
+    return f"{stamp}-{uuid.uuid4().hex[:6]}"
+
+
+def _ui_area_spec(body: "StartBody") -> SearchAreaSpec | None:
+    """The area we already know at start; None when the LLM still has to parse it."""
+    if body.detection_test or body.circle_radius_m is None:
+        return None
+    return SearchAreaSpec(
+        shape="circle", radius_m=body.circle_radius_m, rationale="Provided by UI"
+    )
+
+
+def _open_repo(settings: AgentSettings) -> FindingsRepository:
+    return FindingsRepository(repo_path(settings.findings_db_path))
+
+
+def _coverage_stats(planner: ExplorationPlanner) -> dict:
+    """Small numeric summary shipped alongside the overlay for the UI badge."""
+    return {
+        "fraction": planner.coverage.fraction(),
+        "reachable_m2": planner.coverage.denominator_m2(),
+    }
+
+
+def _push_coverage_overlay(planner: ExplorationPlanner, grid: Any, target: Any) -> None:
+    """Render the current exploration state and publish it to /ws/state."""
+    import litter_ui.zenoh_state as zstate
+
+    png = render_coverage_overlay(
+        grid,
+        target,
+        planner.coverage.seen,
+        planner.coverage.denominator(),
+        planner.dynamic.layer,
+    )
+    zstate.set_coverage_overlay(png, _coverage_stats(planner))
+
+
 # ── Sim runner ────────────────────────────────────────────────────────────────
 
-async def _run_sim(body: "StartBody") -> None:
+async def _run_sim(body: "StartBody", mission_id: str) -> None:
     """Exploration sim with FakePoseSource/FakeNav; broadcasts to /ws/state."""
     import litter_ui.zenoh_state as zstate
 
-    global _current_mission_id
-
     settings = AgentSettings()
-    mission_id = time.strftime("%Y%m%d-%H%M%S") + "-sim-" + uuid.uuid4().hex[:4]
     params = HunterParams.from_settings(settings)
 
-    map_yaml = Path(settings.map_yaml_path)
-    if not map_yaml.is_absolute():
-        map_yaml = _REPO_ROOT / map_yaml
-
-    grid = await FileMapProvider(str(map_yaml)).load()
+    # Explore the same map the UI displays (build_map_provider honours
+    # map_source), so the live coverage overlay lines up with /api/map/image.
+    grid = await build_map_provider(settings).load()
     start_pose = default_start(grid, params.robot_radius_m)
 
     radius = body.circle_radius_m or 5.0
@@ -116,16 +157,23 @@ async def _run_sim(body: "StartBody") -> None:
     zstate.path_history.clear()
     zstate.planned_path = []
     zstate.pose_latest = start_pose
+    zstate.clear_coverage_overlay()
 
     tick_count = 0
+    last_overlay = float("-inf")  # monotonic time of last overlay render
 
     def on_tick(pose: Pose2D) -> None:
-        nonlocal tick_count
+        nonlocal tick_count, last_overlay
+        planner.coverage.update(pose)  # accumulate FoV coverage from live poses
         zstate.pose_latest = pose
         zstate.path_history.append((pose.x, pose.y))
         tick_count += 1
-        if tick_count % 5 == 0:  # throttle broadcast to every 5 ticks
+        if tick_count % 5 == 0:  # throttle plain state broadcast
             zstate._broadcast()
+        now = time.monotonic()
+        if now - last_overlay >= 0.4:  # cap overlay re-render / re-encode rate
+            last_overlay = now
+            _push_coverage_overlay(planner, grid, target)
 
     nav = FakeNav(
         pose_source,
@@ -135,16 +183,15 @@ async def _run_sim(body: "StartBody") -> None:
         skip_start_m=params.robot_radius_m,
     )
 
-    db_path = Path(settings.findings_db_path)
-    if not db_path.is_absolute():
-        db_path = _REPO_ROOT / db_path
-    repo = FindingsRepository(db_path)
+    repo = _open_repo(settings)
 
     logger.info("Sim {} gestartet — Radius {:.1f} m, Startpose ({:.2f}, {:.2f})",
                 mission_id, radius, start_pose.x, start_pose.y)
 
+    # Refines the row /start already created with the exact rasterized area.
     repo.start_mission(mission_id, body.prompt, area_spec, time.time_ns())
     planner.coverage.update(start_pose)
+    _push_coverage_overlay(planner, grid, target)  # show the search area up front
 
     stats = await explore(
         planner, nav, pose_source,
@@ -154,8 +201,8 @@ async def _run_sim(body: "StartBody") -> None:
         blocked_wait_s=0.0,
     )
 
-    # Final broadcast so the map shows the last position
-    zstate._broadcast()
+    # Final render so the map shows the last position and full coverage
+    _push_coverage_overlay(planner, grid, target)
 
     repo.finish_mission(
         mission_id,
@@ -168,7 +215,6 @@ async def _run_sim(body: "StartBody") -> None:
     )
     repo.close()
 
-    _current_mission_id = mission_id
     logger.info(
         "Sim beendet: {} | Coverage {:.0%} | {} Waypoints | {:.1f} m",
         stats.stop_reason,
@@ -180,23 +226,19 @@ async def _run_sim(body: "StartBody") -> None:
 
 # ── Detection-test runner ─────────────────────────────────────────────────────
 
-async def _run_detection_test(body: "StartBody") -> None:
+async def _run_detection_test(body: "StartBody", mission_id: str) -> None:
     """Validation worker only — no navigation, no robot needed.
 
     Subscribes to litter/tracked + litter/frame from the running detector,
     crops stable tracks, sends to Ollama for validation, and saves results.
     All findings land at robot position (0, 0) since there is no real pose.
     """
-    global _current_mission_id
+    import litter_ui.zenoh_state as zstate
+
+    zstate.clear_coverage_overlay()  # no map coverage in the camera-only test
 
     settings = AgentSettings()
-    mission_id = time.strftime("%Y%m%d-%H%M%S") + "-camtest-" + uuid.uuid4().hex[:4]
-
-    db_path = Path(settings.findings_db_path)
-    if not db_path.is_absolute():
-        db_path = _REPO_ROOT / db_path
-
-    repo = FindingsRepository(db_path)
+    repo = _open_repo(settings)
 
     # Dummy pose — robot sits at origin. Findings still get crop images saved.
     pose_source = FakePoseSource(Pose2D(x=0.0, y=0.0, theta=0.0))
@@ -247,7 +289,6 @@ async def _run_detection_test(body: "StartBody") -> None:
         )
         repo.close()
         az.close()
-        _current_mission_id = mission_id
 
 
 # ── Request/response models ───────────────────────────────────────────────────
@@ -273,24 +314,41 @@ async def mission_start(body: StartBody) -> dict:
     _remove_sink()
     _sink_id = _setup_sink()
 
+    # Open the mission's board *before* the run starts: mint the id, write the
+    # row, publish it as the current mission. The UI switches to it immediately
+    # and so drops the previous run's findings, instead of staring at stale
+    # detections until this one finishes.
+    mission_id = _new_mission_id(body)
+    area_spec = _ui_area_spec(body)
+    repo = _open_repo(AgentSettings())
+    repo.start_mission(mission_id, body.prompt, area_spec, time.time_ns())
+    repo.close()
+    _current_mission_id = mission_id
+
     async def _run() -> None:
-        global _sink_id, _current_mission_id
+        global _sink_id
         try:
             if body.detection_test:
-                await _run_detection_test(body)
+                await _run_detection_test(body, mission_id)
             elif body.sim_mode:
-                await _run_sim(body)
+                await _run_sim(body, mission_id)
             else:
-                area_spec: SearchAreaSpec | None = None
-                if body.circle_radius_m is not None:
-                    area_spec = SearchAreaSpec(
-                        shape="circle",
-                        radius_m=body.circle_radius_m,
-                        rationale="Provided by UI",
-                    )
+                import litter_ui.zenoh_state as zstate
+
+                zstate.clear_coverage_overlay()
+
+                def _on_coverage(planner: ExplorationPlanner, _pose: Pose2D) -> None:
+                    # grid/target live on the planner; live pose+path already
+                    # stream to the UI from zenoh_state's own subscriptions.
+                    _push_coverage_overlay(planner, planner.grid, planner.target_mask)
+
                 controller = MissionController()
-                report = await controller.run(body.prompt, area_spec=area_spec)
-                _current_mission_id = report.mission_id
+                await controller.run(
+                    body.prompt,
+                    area_spec=area_spec,
+                    mission_id=mission_id,
+                    on_coverage=_on_coverage,
+                )
         except asyncio.CancelledError:
             _emit_line("Mission wurde gestoppt")
         except Exception as exc:
@@ -300,7 +358,7 @@ async def mission_start(body: StartBody) -> dict:
             _remove_sink()
 
     _running_mission = asyncio.create_task(_run())
-    return {"status": "started", "sim": body.sim_mode}
+    return {"status": "started", "sim": body.sim_mode, "mission_id": mission_id}
 
 
 @router.post("/stop")

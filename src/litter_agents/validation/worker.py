@@ -6,12 +6,11 @@ import time
 from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
 
 import zenoh
 from loguru import logger
 
-from litter_agents.config import AgentSettings
+from litter_agents.config import AgentSettings, repo_path
 from litter_agents.interfaces.detections import TrackedMsg, TrackMsg
 from litter_agents.interfaces.mission import LitterValidation
 from litter_agents.interfaces.robodog import Pose2D
@@ -84,7 +83,7 @@ class DetectionValidationWorker:
         self._settings = settings
         self._mission_id = mission_id
         self._model_name = model_name or settings.vision_model_name
-        self._images_dir = Path(settings.findings_dir) / mission_id / "findings"
+        self._images_dir = repo_path(settings.findings_dir) / mission_id / "findings"
 
         self._frames: deque[FrameMsg] = deque(maxlen=30)
         self._jobs: asyncio.Queue[ValidationJob] = asyncio.Queue(

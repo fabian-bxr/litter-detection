@@ -47,6 +47,14 @@ path_history: deque[tuple[float, float]] = deque(maxlen=10_000)
 nav_status_latest: dict | None = None
 planned_path: list[tuple[float, float]] = []
 
+# Live exploration coverage overlay (rendered by the running sim/mission). The
+# PNG itself is fetched over HTTP (/api/map/coverage.png); the state broadcast
+# only carries a monotonic sequence number so clients know when to refetch,
+# plus small numeric stats for the coverage badge.
+coverage_overlay_png: bytes | None = None
+coverage_overlay_seq: int = 0
+coverage_stats: dict | None = None
+
 # Active /ws/state connections — each holds pre-serialised JSON strings.
 state_subscribers: set[asyncio.Queue[str]] = set()
 
@@ -65,7 +73,27 @@ def state_snapshot() -> dict:
         "path_history": list(path_history),
         "planned_path": planned_path,
         "nav_status": nav_status_latest,
+        "overlay_seq": coverage_overlay_seq,
+        "coverage": coverage_stats,
     }
+
+
+def set_coverage_overlay(png: bytes | None, stats: dict | None) -> None:
+    """Publish a freshly rendered coverage overlay to /ws/state subscribers.
+
+    Bumps the sequence number (so clients refetch the PNG) and broadcasts the
+    new stats. Called from the exploration loop on the asyncio event loop.
+    """
+    global coverage_overlay_png, coverage_overlay_seq, coverage_stats
+    coverage_overlay_png = png
+    coverage_stats = stats
+    coverage_overlay_seq += 1
+    _broadcast()
+
+
+def clear_coverage_overlay() -> None:
+    """Drop the current overlay (e.g. when a mission without coverage starts)."""
+    set_coverage_overlay(None, None)
 
 
 def _broadcast() -> None:

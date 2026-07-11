@@ -11,7 +11,18 @@
       "Bash(uv run *)",
       "Bash(timeout 400 uv lock)",
       "Bash(echo \"=== exit: $? ===\")",
-      "Bash(grep -nE \"^#{1,3} \" README.md)"
+      "Bash(grep -nE \"^#{1,3} \" README.md)",
+      "Bash(timeout 200 uv lock)",
+      "Bash(echo \"lock exit: $?\")",
+      "Bash(uv sync *)",
+      "Bash(echo \"=== SYNC DONE $? ===\")",
+      "Bash(curl -s -m 2 http://localhost:8090/health)",
+      "Bash(break)",
+      "Bash(env)",
+      "Bash(npm run *)",
+      "Bash(fuser -k 8090/tcp)",
+      "Bash(fuser 8090/tcp)",
+      "Bash(MAP_SOURCE=file uv run python -c ' *)"
     ]
   }
 }

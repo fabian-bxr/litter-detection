@@ -3,20 +3,21 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from pathlib import Path
+from collections.abc import Callable
 
 from loguru import logger
 
 from litter_agents.agents.reporter import add_llm_summary, build_report
 from litter_agents.agents.search_area import build_search_area_agent, parse_search_area
 from litter_agents.agents.validator import build_validation_agent, make_validate_fn
-from litter_agents.config import AgentSettings
+from litter_agents.config import AgentSettings, repo_path
 from litter_agents.debug_render import TrajectoryRenderer
 from litter_agents.hunter.explore import explore
 from litter_agents.hunter.params import HunterParams
 from litter_agents.hunter.planner import ExplorationPlanner
 from litter_agents.interfaces.mission import MissionReport, SearchAreaSpec
-from litter_agents.mapping.provider import FileMapProvider, MapProvider
+from litter_agents.interfaces.robodog import Pose2D
+from litter_agents.mapping.provider import MapProvider, build_map_provider
 from litter_agents.mapping.raster import rasterize_area
 from litter_agents.mission.nav_client import ZenohNavClient
 from litter_agents.mission.pose_tracker import ZenohPoseTracker
@@ -41,7 +42,7 @@ class MissionController:
     ) -> None:
         self.settings = settings or AgentSettings()
         self.params = HunterParams.from_settings(self.settings)
-        self._map_provider = map_provider or FileMapProvider(self.settings.map_yaml_path)
+        self._map_provider = map_provider or build_map_provider(self.settings)
 
     async def run(
         self,
@@ -51,14 +52,19 @@ class MissionController:
         confirm: bool = False,
         llm_summary: bool = True,
         enable_validation: bool = True,
+        mission_id: str | None = None,
+        on_coverage: Callable[[ExplorationPlanner, Pose2D], None] | None = None,
     ) -> MissionReport:
         settings = self.settings
-        mission_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
+        # The web UI mints the id up front (it opens the findings board before
+        # the run starts) and passes it in; the CLI lets us mint one here.
+        if mission_id is None:
+            mission_id = time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6]
         started = time.time()
         logger.info("Mission {} starting: {!r}", mission_id, prompt)
 
         az = AsyncZenoh(settings.zenoh_config())
-        repo = FindingsRepository(settings.findings_db_path)
+        repo = FindingsRepository(repo_path(settings.findings_db_path))
         worker: DetectionValidationWorker | None = None
         nav: ZenohNavClient | None = None
         try:
@@ -136,12 +142,12 @@ class MissionController:
             nav = ZenohNavClient(az, pose_tracker, settings)
             renderer: TrajectoryRenderer | None = None
             if settings.debug_render:
-                debug_dir = Path(settings.findings_dir) / mission_id / "debug"
+                debug_dir = repo_path(settings.findings_dir) / mission_id / "debug"
                 renderer = TrajectoryRenderer(grid, target, debug_dir)
                 renderer.trajectory.append((start_pose.x, start_pose.y))
             planner.coverage.update(start_pose)
             coverage_task = asyncio.create_task(
-                self._coverage_loop(planner, pose_tracker, renderer)
+                self._coverage_loop(planner, pose_tracker, renderer, on_coverage)
             )
             try:
                 stats = await explore(
@@ -200,22 +206,27 @@ class MissionController:
         planner: ExplorationPlanner,
         pose_tracker: ZenohPoseTracker,
         renderer: TrajectoryRenderer | None = None,
+        on_coverage: Callable[[ExplorationPlanner, Pose2D], None] | None = None,
     ) -> None:
         """Absorb live poses into the coverage grid, including while driving.
 
         Doubles as the debug-frame driver: accumulates the trajectory and
         periodically saves a frame, mirroring the offline sim's render loop.
+        ``on_coverage`` (used by the web UI) is invoked on the same cadence to
+        publish a live overlay; it is best-effort and never breaks the mission.
         """
         interval = 1.0 / self.settings.coverage_update_hz
         render_every = self.settings.debug_render_interval_s
         last_render = -float("inf")
+        last_callback = -float("inf")
+        callback_every = 0.4  # seconds; overlay render/encode is not free
         while True:
             pose = pose_tracker.latest
             if pose is not None:
                 planner.coverage.update(pose)
+                now = time.monotonic()
                 if renderer is not None:
                     renderer.trajectory.append((pose.x, pose.y))
-                    now = time.monotonic()
                     if render_every > 0 and now - last_render >= render_every:
                         renderer.save_frame(
                             planner.coverage.seen,
@@ -224,6 +235,12 @@ class MissionController:
                             obstacles=planner.dynamic.layer,
                         )
                         last_render = now
+                if on_coverage is not None and now - last_callback >= callback_every:
+                    last_callback = now
+                    try:
+                        on_coverage(planner, pose)
+                    except Exception:
+                        logger.opt(exception=True).debug("coverage callback failed")
             await asyncio.sleep(interval)
 
     def _persist_report(
@@ -239,7 +256,7 @@ class MissionController:
             n_blocked=report.n_blocked,
             report_json=report_json,
         )
-        out_dir = Path(self.settings.findings_dir) / report.mission_id
+        out_dir = repo_path(self.settings.findings_dir) / report.mission_id
         out_dir.mkdir(parents=True, exist_ok=True)
         (out_dir / "report.json").write_text(report_json)
         logger.info("Report written to {}", out_dir / "report.json")

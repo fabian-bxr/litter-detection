@@ -5,9 +5,14 @@ import cv2
 import numpy as np
 import pytest
 
+from litter_agents.config import AgentSettings
 from litter_agents.interfaces.robodog import OccupancyGrid
 from litter_agents.mapping.grid import FREE, OCCUPIED, UNKNOWN, GridMap
-from litter_agents.mapping.provider import FileMapProvider, ZenohMapProvider
+from litter_agents.mapping.provider import (
+    FileMapProvider,
+    ZenohMapProvider,
+    build_map_provider,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -68,13 +73,39 @@ def test_origin_yaw_unsupported(tmp_path):
 def test_loads_real_lab_grid():
     yaml_path = REPO_ROOT / "my_lab_grid.yaml"
     grid = asyncio.run(FileMapProvider(yaml_path).load())
-    assert (grid.height, grid.width) == (225, 405)
+    assert (grid.height, grid.width) == (594, 336)
     n_free = int(grid.free_mask().sum())
     n_occupied = int(grid.occupied_mask().sum())
     # Sanity: the lab map has a usable amount of free space and real walls.
-    assert 3000 < n_free < 30000
+    assert 30000 < n_free < 50000
     assert n_occupied > 500
     assert grid.unknown_mask().sum() > n_free  # gray background dominates
+
+
+def test_file_provider_path_is_cwd_independent(tmp_path, monkeypatch):
+    """A relative map_yaml_path hangs off the repo root, not the CWD.
+
+    Regression: launching the UI/mission from anywhere but the repo root used to
+    resolve 'my_lab_grid.yaml' against the CWD and 404 with "no such file".
+    """
+    monkeypatch.chdir(tmp_path)
+    settings = AgentSettings(map_source="file", map_yaml_path="my_lab_grid.yaml")
+    provider = build_map_provider(settings)
+    assert isinstance(provider, FileMapProvider)
+    assert provider.yaml_path == REPO_ROOT / "my_lab_grid.yaml"
+    assert asyncio.run(provider.load()).width > 0
+
+
+def test_settings_env_file_is_cwd_independent(tmp_path, monkeypatch):
+    """AgentSettings reads the repo-root .env wherever it is constructed from.
+
+    Regression: a CWD-relative env_file silently dropped MAP_SOURCE and
+    OLLAMA_API_KEY back to their defaults when launched from a subdirectory.
+    """
+    monkeypatch.chdir(tmp_path)
+    env_file = AgentSettings.model_config["env_file"]
+    assert Path(env_file).is_absolute()
+    assert Path(env_file) == REPO_ROOT / ".env"
 
 
 def test_zenoh_map_provider_uses_fetch():

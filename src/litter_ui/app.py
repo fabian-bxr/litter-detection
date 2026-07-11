@@ -11,6 +11,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 import litter_ui.zenoh_state as zenoh_state
+from litter_agents.tracing import setup_mlflow_tracing
 from litter_ui.routes import findings as findings_routes
 from litter_ui.routes import map as map_routes
 from litter_ui.routes import missions as missions_routes
@@ -21,6 +22,7 @@ _REPO_ROOT = Path(__file__).parents[2]  # src/litter_ui -> src -> repo root
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    setup_mlflow_tracing()  # missions run in-process (routes/missions.py)
     await zenoh_state.startup()
     yield
     zenoh_state.shutdown()
@@ -58,4 +60,4 @@ def create_app() -> FastAPI:
 
 
 def main() -> None:
-    uvicorn.run(create_app(), host="0.0.0.0", port=8080)
+    uvicorn.run(create_app(), host="0.0.0.0", port=8090)
